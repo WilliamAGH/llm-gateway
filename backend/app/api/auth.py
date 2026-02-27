@@ -9,6 +9,7 @@ Enables admin authentication when both ADMIN_USERNAME and ADMIN_PASSWORD are set
 from collections import deque
 import asyncio
 import logging
+import math
 import time
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
@@ -86,8 +87,10 @@ async def _get_block_remaining_seconds(client_ip: str) -> int:
         blocked_until = _login_blocked_until.get(client_ip)
         if not blocked_until:
             return 0
-        remaining = int(blocked_until - now_ts)
-        return max(1, remaining) if remaining > 0 else 0
+        remaining = blocked_until - now_ts
+        if remaining <= 0:
+            return 0
+        return math.ceil(remaining)
 
 
 async def _record_login_failure(client_ip: str) -> int:
