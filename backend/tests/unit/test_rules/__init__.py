@@ -1,3 +1,3 @@
 """
-规则引擎测试模块初始化
+Rule engine tests package.
 """

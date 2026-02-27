@@ -1,3 +1,3 @@
 """
-服务层测试模块初始化
+Service layer tests package.
 """

@@ -1,3 +1,3 @@
 """
-Repository 测试模块初始化
+Repository tests package.
 """

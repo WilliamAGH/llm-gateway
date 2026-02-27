@@ -1,3 +1,3 @@
 """
-公共模块测试初始化
+Common module tests package.
 """

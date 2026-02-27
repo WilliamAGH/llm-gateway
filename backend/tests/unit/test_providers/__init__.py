@@ -1,3 +1,3 @@
 """
-Provider 测试模块初始化
+Provider tests package.
 """
