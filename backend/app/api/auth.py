@@ -8,6 +8,7 @@ Enables admin authentication when both ADMIN_USERNAME and ADMIN_PASSWORD are set
 
 from collections import deque
 import asyncio
+import logging
 import time
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
@@ -27,6 +28,7 @@ _LOGIN_BLOCK_SECONDS = 900
 _login_failures: dict[str, deque[float]] = {}
 _login_blocked_until: dict[str, float] = {}
 _login_throttle_lock = asyncio.Lock()
+logger = logging.getLogger(__name__)
 
 
 class AuthStatusResponse(BaseModel):
@@ -56,6 +58,10 @@ def _extract_bearer_token(authorization: str | None) -> str | None:
 def _extract_client_ip(request: Request) -> str:
     if request.client and request.client.host:
         return request.client.host
+    logger.debug(
+        "Admin login request missing client host; using fallback ip bucket",
+        extra={"path": request.url.path},
+    )
     return "unknown"
 
 
