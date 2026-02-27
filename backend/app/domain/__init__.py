@@ -1,5 +1,5 @@
 """
-领域模型模块初始化
+Domain model exports.
 """
 
 from app.domain.provider import (

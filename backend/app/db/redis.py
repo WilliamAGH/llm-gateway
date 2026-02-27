@@ -37,7 +37,7 @@ async def init_redis() -> None:
     if Redis is None:
         raise RuntimeError(
             "Redis backend requested but 'redis' package is not installed. "
-            "Install backend dependencies (pip install -r requirements.txt)."
+            "Install backend dependencies with 'uv sync' in the backend directory."
         )
 
     settings = get_settings()

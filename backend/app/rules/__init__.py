@@ -1,5 +1,5 @@
 """
-规则引擎模块初始化
+Rule engine exports.
 """
 
 from app.rules.context import RuleContext, TokenUsage

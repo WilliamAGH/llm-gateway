@@ -1,5 +1,5 @@
 """
-数据访问层模块初始化
+Repository layer exports.
 """
 
 from app.repositories.base import BaseRepository

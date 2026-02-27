@@ -1,5 +1,5 @@
 """
-上游供应商适配器模块初始化
+Upstream provider adapter exports.
 """
 
 from app.providers.base import ProviderClient, ProviderResponse

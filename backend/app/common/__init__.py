@@ -1,5 +1,5 @@
 """
-公共模块初始化
+Common module exports.
 """
 
 from app.common.errors import (
@@ -17,7 +17,7 @@ from app.common.timer import Timer
 from app.common.utils import generate_api_key, generate_trace_id
 
 __all__ = [
-    # 错误类
+    # Error classes
     "AppError",
     "AuthenticationError",
     "NotFoundError",
@@ -25,7 +25,7 @@ __all__ = [
     "ValidationError",
     "UpstreamError",
     "ServiceError",
-    # 工具函数
+    # Utilities
     "sanitize_authorization",
     "sanitize_headers",
     "TokenCounter",
