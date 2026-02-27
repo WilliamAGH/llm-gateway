@@ -1,28 +1,15 @@
 /**
  * Root Layout Component
- * Configures global fonts, styles, and Providers
+ * Configures global styles and providers
  */
 
 import type { Metadata } from 'next';
 import Script from 'next/script';
-import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 import { Providers } from './providers';
 import { AuthGate } from '@/components/auth';
 import { IntlProvider } from '@/components/common/IntlProvider';
 import { AppShell } from '@/components/common/AppShell';
-
-// Configure Sans-serif Font
-const geistSans = Geist({
-  variable: '--font-geist-sans',
-  subsets: ['latin'],
-});
-
-// Configure Monospace Font
-const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
-  subsets: ['latin'],
-});
 
 // Page Metadata
 export const metadata: Metadata = {
@@ -61,7 +48,7 @@ export default function RootLayout({
         />
       </head>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className="antialiased"
         suppressHydrationWarning
       >
         <IntlProvider>
