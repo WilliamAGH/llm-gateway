@@ -42,12 +42,9 @@ The project follows a standard full-stack architecture:
     ```bash
     cd backend
     ```
-2.  Install dependencies (assuming `uv` or `pip`):
+2.  Install dependencies:
     ```bash
-    # using uv
     uv sync
-    # OR using pip
-    pip install -r requirements.txt
     ```
 3.  Run database migrations:
     ```bash

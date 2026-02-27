@@ -11,8 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="README.md"><strong>English</strong></a> ·
-  <a href="README_zh-CN.md">中文</a>
+  <a href="README.md"><strong>English</strong></a>
 </p>
 
 <p align="center">
@@ -128,9 +127,8 @@ docker run -d \
 ```bash
 cd backend
 
-# Install dependencies (choose one)
-uv sync          # Recommended: using uv
-pip install -r requirements.txt  # Or using pip
+# Install dependencies
+uv sync
 
 # Initialize database
 alembic upgrade head

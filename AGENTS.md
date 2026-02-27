@@ -10,7 +10,7 @@ Run commands from each app directory:
 cd backend
 uv venv .venv
 source .venv/bin/activate
-uv pip install -r requirements.txt
+uv sync
 uv run python -m app.main
 pytest
 ```
@@ -30,7 +30,7 @@ npm run lint
 - `npm run lint`: ESLint checks.
 
 ## Local Setup & CI Expectations
-Backend uses `uv` with a Python 3.12 virtualenv; install dependencies from `backend/requirements.txt`. Frontend uses npm (or pnpm/yarn if you prefer) with `frontend/package.json`.
+Backend uses `uv` with a Python 3.12 virtualenv and dependencies declared in `backend/pyproject.toml`. Frontend uses npm (or pnpm/yarn if you prefer) with `frontend/package.json`.
 
 CI is not defined in this repo, so treat local checks as the gate: run `pytest` for backend changes and `npm run lint` (plus `npm run build` when touching Next.js config) before opening a PR.
 
