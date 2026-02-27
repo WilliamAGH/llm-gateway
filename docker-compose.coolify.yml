@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-llm_gateway}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-llm_gateway_password}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${POSTGRES_LOCAL_PORT:-5467}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -31,14 +31,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: llm-gateway:local
+    image: llm-gateway:coolify
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    ports:
-      - "${LLM_GATEWAY_PORT:-8000}:8000"
+    expose:
+      - "8000"
     environment:
       DEBUG: ${DEBUG:-false}
       DATABASE_TYPE: ${DATABASE_TYPE:-postgresql}
@@ -47,6 +47,7 @@ services:
       KV_STORE_TYPE: ${KV_STORE_TYPE:-redis}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-*}
       NEXT_TELEMETRY_DISABLED: "1"
     volumes:
       - ./data:/data

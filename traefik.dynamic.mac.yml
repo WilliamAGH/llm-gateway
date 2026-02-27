@@ -1,0 +1,18 @@
+http:
+  routers:
+    llm-gateway-web:
+      entryPoints:
+        - web
+      rule: "PathPrefix(`/`)"
+      service: llm-gateway
+    llm-gateway-websecure:
+      entryPoints:
+        - websecure
+      rule: "PathPrefix(`/`)"
+      service: llm-gateway
+      tls: {}
+  services:
+    llm-gateway:
+      loadBalancer:
+        servers:
+          - url: "http://llm-gateway:8000"
