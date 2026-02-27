@@ -1,5 +1,5 @@
 /**
- * 供应商组件统一导出
+ * Provider component exports
  */
 
 export * from './ProviderForm';

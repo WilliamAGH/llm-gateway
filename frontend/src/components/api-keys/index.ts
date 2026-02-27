@@ -1,5 +1,5 @@
 /**
- * API Key 组件统一导出
+ * API key component exports
  */
 
 export * from './ApiKeyForm';

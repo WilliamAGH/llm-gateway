@@ -19,7 +19,7 @@ import { setLocale } from "./IntlProvider";
 
 const localeLabels: Record<Locale, string> = {
   en: "English",
-  zh: "中文",
+  zh: "Chinese",
 };
 
 export function LanguageSwitcher() {

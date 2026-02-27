@@ -1,5 +1,5 @@
 /**
- * 模型组件统一导出
+ * Model component exports
  */
 
 export * from './ModelForm';

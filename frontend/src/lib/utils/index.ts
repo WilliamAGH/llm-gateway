@@ -1,5 +1,5 @@
 /**
- * 工具函数统一导出
+ * Utility exports
  */
 
 export * from './format';

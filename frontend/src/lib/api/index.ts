@@ -1,5 +1,5 @@
 /**
- * API 接口统一导出
+ * API exports
  */
 
 export * from './client';

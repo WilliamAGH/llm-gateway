@@ -1,5 +1,5 @@
 /**
- * 日志组件统一导出
+ * Log component exports
  */
 
 export * from './LogFilters';

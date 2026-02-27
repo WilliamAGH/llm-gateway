@@ -1,5 +1,5 @@
 /**
- * 通用组件统一导出
+ * Shared component exports
  */
 
 export * from './Pagination';

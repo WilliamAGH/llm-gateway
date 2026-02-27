@@ -1,6 +1,6 @@
 /**
- * 全局样式
- * 配置 Tailwind CSS 和自定义 CSS 变量
+ * Global styles
+ * Tailwind CSS and custom CSS variables
  */
 
 @import "tailwindcss";
@@ -8,7 +8,7 @@
 /* Make `dark:` respond to `.dark` class (Tailwind v4) */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* CSS 变量定义 - 浅色主题 */
+/* CSS variable definitions - light theme */
 :root {
   --background: 0 0% 100%;
   --foreground: 240 10% 3.9%;
@@ -33,7 +33,7 @@
   color-scheme: light;
 }
 
-/* 深色主题（可选） */
+/* Dark theme (optional) */
 .dark {
   --background: 240 10% 3.9%;
   --foreground: 0 0% 98%;
@@ -57,7 +57,7 @@
   color-scheme: dark;
 }
 
-/* Tailwind 主题配置 */
+/* Tailwind theme mapping */
 @theme inline {
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
@@ -82,11 +82,11 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: "SF Pro Text", "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-mono: "SFMono-Regular", "Menlo", "Monaco", "Consolas", "Liberation Mono", monospace;
 }
 
-/* 基础样式 */
+/* Base styles */
 * {
   border-color: hsl(var(--border));
 }
@@ -94,7 +94,7 @@
 body {
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));
-  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  font-family: var(--font-sans);
 }
 
 @layer utilities {
@@ -108,7 +108,7 @@ body {
   }
 }
 
-/* 动画 */
+/* Animations */
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -141,7 +141,7 @@ body {
   }
 }
 
-/* 对话框动画类 */
+/* Dialog animation classes */
 .animate-overlay[data-state="open"] {
   animation: fadeIn 200ms ease-out;
 }
