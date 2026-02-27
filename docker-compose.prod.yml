@@ -44,6 +44,7 @@ services:
       KV_STORE_TYPE: ${KV_STORE_TYPE:-redis}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      NEXT_TELEMETRY_DISABLED: "1"
     volumes:
       - ./data:/data
     restart: unless-stopped

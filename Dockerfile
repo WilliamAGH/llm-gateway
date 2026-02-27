@@ -4,6 +4,7 @@ FROM node:current-bookworm-slim AS frontend-builder
 WORKDIR /build/frontend
 
 COPY frontend/package.json frontend/package-lock.json* ./
+ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm ci
 
 COPY frontend/ ./
@@ -13,23 +14,22 @@ RUN npm run build
 
 FROM python:3.12-slim AS runtime
 
+COPY --from=ghcr.io/astral-sh/uv:0.8.22 /uv /uvx /usr/local/bin/
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1 \
     PYTHONPATH=/app/backend \
     FRONTEND_DIST_DIR=/app/static \
+    NEXT_TELEMETRY_DISABLED=1 \
     DATABASE_URL=sqlite+aiosqlite:////data/llm_gateway.db
 
 WORKDIR /app
 
-COPY backend/requirements.txt /app/backend/requirements.txt
-RUN pip install --no-cache-dir --prefer-binary -r /app/backend/requirements.txt
-
-COPY llm_api_converter /app/llm_api_converter
-RUN pip install --no-cache-dir /app/llm_api_converter
+COPY backend/pyproject.toml backend/uv.lock /app/backend/
+RUN uv sync --frozen --no-dev --project /app/backend
 
 COPY backend/app /app/backend/app
+COPY llm_api_converter /app/llm_api_converter
 
 COPY --from=frontend-builder /build/frontend/out /app/static
 
@@ -43,4 +43,4 @@ WORKDIR /app/backend
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "--project", "/app/backend", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
