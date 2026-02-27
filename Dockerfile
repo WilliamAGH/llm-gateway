@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM public.ecr.aws/docker/library/node:current-bookworm-slim AS frontend-builder
+FROM public.ecr.aws/docker/library/node:lts-bookworm-slim AS frontend-builder
 WORKDIR /build/frontend
 
 COPY frontend/package.json frontend/package-lock.json* ./
@@ -12,7 +12,7 @@ ENV NEXT_PUBLIC_API_BASE_URL=
 RUN npm run build
 
 
-FROM public.ecr.aws/docker/library/python:3.12-slim AS runtime
+FROM public.ecr.aws/docker/library/python:3.12.11-slim AS runtime
 
 COPY --from=ghcr.io/astral-sh/uv:0.8.22 /uv /uvx /usr/local/bin/
 
