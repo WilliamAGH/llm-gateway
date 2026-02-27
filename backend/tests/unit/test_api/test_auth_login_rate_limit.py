@@ -112,3 +112,14 @@ async def test_login_rate_limit_is_scoped_per_ip():
             json={"username": "admin", "password": "wrong-password"},
         )
         assert other_ip_response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_block_remaining_seconds_rounds_up_subsecond(monkeypatch):
+    auth_api._reset_login_throttle_state()
+    auth_api._login_blocked_until["10.0.0.9"] = 1001.2
+    monkeypatch.setattr(auth_api.time, "time", lambda: 1000.0)
+
+    remaining = await auth_api._get_block_remaining_seconds("10.0.0.9")
+
+    assert remaining == 2
