@@ -23,7 +23,7 @@ A Python library for converting between OpenAI and Anthropic API protocols. Supp
 ## Installation
 
 ```bash
-pip install api-protocol-converter
+uv add api-protocol-converter
 ```
 
 Or install from source:
@@ -31,7 +31,7 @@ Or install from source:
 ```bash
 git clone https://github.com/example/api-protocol-converter.git
 cd api-protocol-converter
-pip install -e .
+uv sync
 ```
 
 ## Quick Start
@@ -228,17 +228,17 @@ See [docs/PROTOCOL_COMPARISON.md](docs/PROTOCOL_COMPARISON.md) for complete mapp
 
 ```bash
 # Install dev dependencies
-pip install -e ".[dev]"
+uv sync --extra dev
 
 # Run tests
-pytest
+uv run pytest
 
 # Type checking
-mypy api_protocol_converter
+uv run mypy api_protocol_converter
 
 # Format code
-black api_protocol_converter tests
-isort api_protocol_converter tests
+uv run black api_protocol_converter tests
+uv run isort api_protocol_converter tests
 ```
 
 ## License

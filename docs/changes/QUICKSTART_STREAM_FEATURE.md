@@ -44,7 +44,7 @@ npm run dev
 ## Testing Stream Display
 
 1. Make a stream request through your API
-2. Check the logs page - you should now see the wave icon (🌊) in the "Token消耗/Stream" column
+2. Check the logs page - you should now see the wave icon (🌊) in the "Token Usage/Stream" column
 3. For non-stream requests, you'll see a dash (-)
 
 ## Troubleshooting

@@ -68,12 +68,12 @@ Once you run the migration and restart:
 
 **Stream Request:**
 ```
-Token消耗/Stream: 1500 / 🌊
+Token Usage/Stream: 1500 / 🌊
 ```
 
 **Non-Stream Request:**
 ```
-Token消耗/Stream: 1500 / -
+Token Usage/Stream: 1500 / -
 ```
 
 ## 📊 Verification Steps

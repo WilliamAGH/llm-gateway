@@ -285,9 +285,8 @@ backend/
 │   └── integration/               # Integration tests
 │       └── test_proxy_flow.py
 │
-├── requirements.txt
-├── requirements-dev.txt
 ├── pyproject.toml
+├── uv.lock
 └── README.md
 ```
 
