@@ -45,7 +45,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             className="rounded-full shadow-sm"
           >
             <a
-              href="https://github.com/mylxsw/llm-gateway"
+              href="https://github.com/WilliamAGH/llm-gateway"
               target="_blank"
               rel="noopener noreferrer"
               aria-label="GitHub Repository"

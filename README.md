@@ -94,7 +94,7 @@ The fastest way to get started with PostgreSQL:
 
 ```bash
 # Clone the repository
-git clone https://github.com/mylxsw/llm-gateway.git
+git clone https://github.com/WilliamAGH/llm-gateway
 cd llm-gateway
 # Start services
 docker compose -f docker-compose.prod.yml up -d
@@ -107,11 +107,12 @@ Access the dashboard at **http://localhost:8000** (or the port you set in `LLM_G
 Run with SQLite for simple deployments:
 
 ```bash
+docker build -t llm-gateway:latest .
 docker run -d \
   -p 8000:8000 \
   -v $(pwd)/data:/data \
   --name llm-gateway \
-  ghcr.io/mylxsw/llm-gateway:latest
+  llm-gateway:latest
 ```
 
 ### Manual Installation
