@@ -14,6 +14,11 @@ import time
 import uuid
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
+from app.common.reasoning import (
+    normalize_reasoning_for_anthropic,
+    normalize_reasoning_for_openai,
+)
+
 from .base import (
     ConversionResult,
     IRequestConverter,
@@ -265,6 +270,7 @@ def _openai_completions_to_chat_request(body: Dict[str, Any]) -> Dict[str, Any]:
         "frequency_penalty",
         "logprobs",
         "user",
+        "reasoning",
     )
     for key in passthrough:
         if key in body:
@@ -463,6 +469,96 @@ def _openai_content_to_gemini_parts(content: Any) -> list[Dict[str, Any]]:
     return parts
 
 
+def _clean_gemini_schema(schema: Any) -> Any:
+    """Recursively remove unsupported keys from JSON schema for Gemini API."""
+    if isinstance(schema, list):
+        cleaned_list = [_clean_gemini_schema(item) for item in schema]
+        return [item for item in cleaned_list if item not in (None, {}, [], ())]
+    if not isinstance(schema, dict):
+        return schema
+
+    unsupported_keys = {
+        "additionalProperties",
+        "allOf",
+        "const",
+        "contains",
+        "contentEncoding",
+        "contentMediaType",
+        "contentSchema",
+        "dependencies",
+        "dependentRequired",
+        "dependentSchemas",
+        "else",
+        "exclusiveMaximum",
+        "exclusiveMinimum",
+        "if",
+        "maxContains",
+        "multipleOf",
+        "not",
+        "patternProperties",
+        "prefixItems",
+        "propertyNames",
+        "then",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+    }
+    cleaned = {}
+    for k, v in schema.items():
+        if k in unsupported_keys or k.startswith("$"):
+            continue
+        if k in ("default", "example"):
+            cleaned_value = copy.deepcopy(v)
+        else:
+            cleaned_value = _clean_gemini_schema(v)
+        if k == "required" and cleaned_value == []:
+            continue
+        if cleaned_value in (None, {}, [], ()):
+            continue
+        cleaned[k] = cleaned_value
+    return cleaned
+
+
+def sanitize_gemini_request_body(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Strip unsupported schema keywords from Gemini request payloads."""
+    out = copy.deepcopy(body)
+
+    tools = out.get("tools")
+    if isinstance(tools, list):
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            declarations = tool.get("functionDeclarations")
+            if not isinstance(declarations, list):
+                continue
+            for decl in declarations:
+                if not isinstance(decl, dict):
+                    continue
+                params = decl.get("parameters")
+                if isinstance(params, dict):
+                    cleaned_params = _clean_gemini_schema(params)
+                    if cleaned_params:
+                        decl["parameters"] = cleaned_params
+                    else:
+                        decl.pop("parameters", None)
+
+    generation_config = out.get("generationConfig")
+    if isinstance(generation_config, dict):
+        response_schema = generation_config.get("responseSchema")
+        if isinstance(response_schema, dict):
+            cleaned_schema = _clean_gemini_schema(response_schema)
+            if cleaned_schema:
+                generation_config["responseSchema"] = cleaned_schema
+            else:
+                generation_config.pop("responseSchema", None)
+
+    return out
+
+
+def _sanitize_gemini_request_body(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Backward-compatible private alias for Gemini request sanitization."""
+    return sanitize_gemini_request_body(body)
+
+
 def _openai_tools_to_gemini_tools(tools: Any) -> Optional[list[Dict[str, Any]]]:
     if not isinstance(tools, list):
         return None
@@ -483,7 +579,11 @@ def _openai_tools_to_gemini_tools(tools: Any) -> Optional[list[Dict[str, Any]]]:
             decl["description"] = fn["description"]
         params = fn.get("parameters")
         if isinstance(params, dict):
-            decl["parameters"] = params
+            cleaned_params = _clean_gemini_schema(params)
+            if cleaned_params.get("properties"):
+                decl["parameters"] = cleaned_params
+            elif cleaned_params.get("type") and len(cleaned_params) > 1:
+                decl["parameters"] = cleaned_params
         declarations.append(decl)
 
     if not declarations:
@@ -534,6 +634,7 @@ def _openai_chat_to_gemini_request(
 
     contents: list[Dict[str, Any]] = []
     system_parts: list[Dict[str, Any]] = []
+    tool_call_names: dict[str, str] = {}
 
     for msg in messages:
         if not isinstance(msg, dict):
@@ -544,7 +645,10 @@ def _openai_chat_to_gemini_request(
             system_parts.extend(_openai_content_to_gemini_parts(msg.get("content")))
             continue
 
-        parts = _openai_content_to_gemini_parts(msg.get("content"))
+        if role == "tool":
+            parts = []
+        else:
+            parts = _openai_content_to_gemini_parts(msg.get("content"))
 
         if role == "assistant":
             tool_calls = msg.get("tool_calls")
@@ -561,29 +665,59 @@ def _openai_chat_to_gemini_request(
                     args = _safe_json_loads(fn.get("arguments"))
                     if not isinstance(args, dict):
                         args = {"value": args}
-                    parts.append({"functionCall": {"name": name, "args": args}})
+                    
+                    fc_payload: Dict[str, Any] = {"name": name, "args": args}
+                    call_id = tc.get("id")
+                    if call_id:
+                        fc_payload["id"] = call_id
+                        tool_call_names[str(call_id)] = name
+
+                    part: Dict[str, Any] = {"functionCall": fc_payload}
+                    extra_content = tc.get("extra_content")
+                    if isinstance(extra_content, dict):
+                        google_extra = extra_content.get("google")
+                        if isinstance(google_extra, dict):
+                            ts = google_extra.get("thought_signature")
+                            if ts:
+                                part["thoughtSignature"] = ts
+                    parts.append(part)
 
         if role == "tool":
-            response_name = msg.get("name") or "tool"
+            tool_call_id = msg.get("tool_call_id")
+            response_name = (
+                msg.get("name")
+                or (tool_call_names.get(str(tool_call_id)) if tool_call_id else None)
+                or "tool"
+            )
             tool_payload: Any = msg.get("content")
             if isinstance(tool_payload, str):
                 tool_payload = _safe_json_loads(tool_payload)
+            tool_response: Dict[str, Any] = {
+                "name": response_name,
+                "response": {"content": tool_payload},
+            }
+            if tool_call_id:
+                tool_response["id"] = tool_call_id
             parts.append(
                 {
-                    "functionResponse": {
-                        "name": response_name,
-                        "response": {"content": tool_payload},
-                    }
+                    "functionResponse": tool_response
                 }
             )
             role = "user"
 
-        contents.append(
-            {
-                "role": "model" if role == "assistant" else "user",
-                "parts": parts or [{"text": ""}],
-            }
-        )
+        target_role = "model" if role == "assistant" else "user"
+        if not parts:
+            parts = [{"text": ""}]
+            
+        if contents and contents[-1]["role"] == target_role:
+            contents[-1]["parts"].extend(parts)
+        else:
+            contents.append(
+                {
+                    "role": target_role,
+                    "parts": parts,
+                }
+            )
 
     out: Dict[str, Any] = {"contents": contents or [{"role": "user", "parts": [{"text": ""}]}]}
 
@@ -638,7 +772,7 @@ def _openai_chat_to_gemini_request(
     stream = bool(body.get("stream"))
     return ConversionResult(
         path=_build_gemini_generate_path(target_model, stream),
-        body=out,
+        body=sanitize_gemini_request_body(out),
     )
 
 
@@ -703,27 +837,30 @@ def _gemini_request_to_openai_chat(
                 fc = part.get("functionCall")
                 if isinstance(fc, dict) and isinstance(fc.get("name"), str):
                     args = fc.get("args")
-                    tool_calls.append(
-                        {
-                            "id": f"call_{uuid.uuid4().hex}",
-                            "type": "function",
-                            "function": {
-                                "name": fc["name"],
-                                "arguments": json.dumps(args or {}, ensure_ascii=False),
-                            },
-                        }
-                    )
+                    tool_call: Dict[str, Any] = {
+                        "id": fc.get("id") or f"call_{uuid.uuid4().hex}",
+                        "type": "function",
+                        "function": {
+                            "name": fc["name"],
+                            "arguments": json.dumps(args or {}, ensure_ascii=False),
+                        },
+                    }
+                    ts = part.get("thoughtSignature") or part.get("thought_signature")
+                    if ts:
+                        tool_call["extra_content"] = {"google": {"thought_signature": ts}}
+                    tool_calls.append(tool_call)
                 fr = part.get("functionResponse")
                 if isinstance(fr, dict):
                     tool_name = fr.get("name") if isinstance(fr.get("name"), str) else "tool"
                     tool_content = fr.get("response", {}).get("content")
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "name": tool_name,
-                            "content": json.dumps(tool_content, ensure_ascii=False),
-                        }
-                    )
+                    tool_msg: Dict[str, Any] = {
+                        "role": "tool",
+                        "name": tool_name,
+                        "content": json.dumps(tool_content, ensure_ascii=False),
+                    }
+                    if "id" in fr:
+                        tool_msg["tool_call_id"] = fr["id"]
+                    messages.append(tool_msg)
 
         msg: Dict[str, Any] = {"role": openai_role}
         if tool_calls:
@@ -958,16 +1095,18 @@ def _gemini_response_to_openai(
                 text_parts.append(part["text"])
             fc = part.get("functionCall")
             if isinstance(fc, dict) and isinstance(fc.get("name"), str):
-                tool_calls.append(
-                    {
-                        "id": f"call_{uuid.uuid4().hex}",
-                        "type": "function",
-                        "function": {
-                            "name": fc["name"],
-                            "arguments": json.dumps(fc.get("args") or {}, ensure_ascii=False),
-                        },
-                    }
-                )
+                tool_call = {
+                    "id": fc.get("id") or f"call_{uuid.uuid4().hex}",
+                    "type": "function",
+                    "function": {
+                        "name": fc["name"],
+                        "arguments": json.dumps(fc.get("args") or {}, ensure_ascii=False),
+                    },
+                }
+                ts = part.get("thoughtSignature") or part.get("thought_signature")
+                if ts:
+                    tool_call["extra_content"] = {"google": {"thought_signature": ts}}
+                tool_calls.append(tool_call)
             inline = part.get("inlineData")
             if (
                 isinstance(inline, dict)
@@ -1066,14 +1205,22 @@ def _openai_response_to_gemini(
                     fn = tc.get("function")
                     if not isinstance(fn, dict) or not isinstance(fn.get("name"), str):
                         continue
-                    parts.append(
-                        {
-                            "functionCall": {
-                                "name": fn["name"],
-                                "args": _safe_json_loads(fn.get("arguments")),
-                            }
-                        }
-                    )
+                    fc_payload: Dict[str, Any] = {
+                        "name": fn["name"],
+                        "args": _safe_json_loads(fn.get("arguments")),
+                    }
+                    if "id" in tc:
+                        fc_payload["id"] = tc["id"]
+                        
+                    part: Dict[str, Any] = {"functionCall": fc_payload}
+                    extra_content = tc.get("extra_content")
+                    if isinstance(extra_content, dict):
+                        google_extra = extra_content.get("google")
+                        if isinstance(google_extra, dict):
+                            ts = google_extra.get("thought_signature")
+                            if ts:
+                                part["thoughtSignature"] = ts
+                    parts.append(part)
         usage = body.get("usage", {})
         usage_meta = {
             "promptTokenCount": usage.get("prompt_tokens", 0),
@@ -1148,6 +1295,8 @@ class SDKRequestConverter(IRequestConverter):
         options = options or {}
 
         try:
+            original_body = copy.deepcopy(body)
+
             if self._source == Protocol.GEMINI:
                 openai_result = _gemini_request_to_openai_chat(path, body, target_model)
                 if self._target == Protocol.OPENAI:
@@ -1212,7 +1361,10 @@ class SDKRequestConverter(IRequestConverter):
 
             # Normalize OpenAI request
             if self._source == Protocol.OPENAI:
-                body = _normalize_openai_tooling_fields(body)
+                if path == _OPENAI_COMPLETIONS_PATH:
+                    body = _openai_completions_to_chat_request(body)
+                else:
+                    body = _normalize_openai_tooling_fields(body)
             elif self._source == Protocol.OPENAI_RESPONSES:
                 body = _normalize_openai_responses_tooling_fields(body)
 
@@ -1242,6 +1394,17 @@ class SDKRequestConverter(IRequestConverter):
 
             # Set target model
             converted["model"] = target_model
+
+            if self._target in (Protocol.OPENAI, Protocol.OPENAI_RESPONSES):
+                converted = normalize_reasoning_for_openai(
+                    converted,
+                    source_body=original_body,
+                )
+            elif self._target == Protocol.ANTHROPIC:
+                converted = normalize_reasoning_for_anthropic(
+                    converted,
+                    source_body=original_body,
+                )
 
             # Get target path
             target_path = self.get_target_path(path)
@@ -1934,6 +2097,7 @@ class SDKStreamConverter(IStreamConverter):
         sent_role = False
         response_id = f"chatcmpl-{uuid.uuid4().hex}"
         done = False
+        tool_call_index = 0
 
         async for chunk in upstream:
             for payload in decoder.feed(chunk):
@@ -1966,18 +2130,23 @@ class SDKStreamConverter(IStreamConverter):
                                 args = fc.get("args")
                                 if not isinstance(args, str):
                                     args = json.dumps(args or {}, ensure_ascii=False)
+                                
+                                tool_call: Dict[str, Any] = {
+                                    "index": tool_call_index,
+                                    "id": fc.get("id") or f"call_{uuid.uuid4().hex}",
+                                    "type": "function",
+                                    "function": {
+                                        "name": fc["name"],
+                                        "arguments": args,
+                                    },
+                                }
+                                tool_call_index += 1
+                                ts = part.get("thoughtSignature") or part.get("thought_signature")
+                                if ts:
+                                    tool_call["extra_content"] = {"google": {"thought_signature": ts}}
+                                
                                 delta = {
-                                    "tool_calls": [
-                                        {
-                                            "index": 0,
-                                            "id": f"call_{uuid.uuid4().hex}",
-                                            "type": "function",
-                                            "function": {
-                                                "name": fc["name"],
-                                                "arguments": args,
-                                            },
-                                        }
-                                    ]
+                                    "tool_calls": [tool_call]
                                 }
                                 if not sent_role:
                                     delta["role"] = "assistant"

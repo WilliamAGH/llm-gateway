@@ -1,6 +1,6 @@
 
 import pytest
-from app.common.token_counter import OpenAITokenCounter
+from app.common.token_counter import AnthropicTokenCounter, OpenAITokenCounter
 
 def test_count_input_string():
     counter = OpenAITokenCounter()
@@ -36,6 +36,36 @@ def test_count_input_empty():
     assert counter.count_input([]) == 0
 
 
+def test_count_tokens_treats_reserved_special_token_text_as_plain_text():
+    text = "literal marker <|endoftext|> should not fail"
+
+    assert OpenAITokenCounter().count_tokens(text, "gpt-4") > 0
+    assert AnthropicTokenCounter().count_tokens(text, "claude-sonnet-4-0") > 0
+
+
+def test_anthropic_count_request_allows_reserved_special_token_text():
+    counter = AnthropicTokenCounter()
+    body = {
+        "model": "claude-sonnet-4-0",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_123",
+                        "content": [
+                            {"type": "text", "text": "literal <|endoftext|> value"}
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    assert counter.count_request(body) > 0
+
+
 def test_count_messages_with_image_detail_low_adds_tokens():
     counter = OpenAITokenCounter()
     image_payload = {
@@ -69,3 +99,79 @@ def test_count_request_tools_increases_tokens():
     base = counter.count_request(body)
     with_tools = counter.count_request(body_with_tools)
     assert with_tools > base
+
+
+def test_anthropic_count_request_with_system_and_tools_increases_tokens():
+    counter = AnthropicTokenCounter()
+    body = {
+        "model": "claude-sonnet-4-0",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    body_with_system_and_tools = {
+        "model": "claude-sonnet-4-0",
+        "system": "You are helpful.",
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [
+            {
+                "name": "get_weather",
+                "description": "Get weather by city",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            }
+        ],
+    }
+    base = counter.count_request(body)
+    with_system_and_tools = counter.count_request(body_with_system_and_tools)
+    assert with_system_and_tools > base
+
+
+def test_anthropic_count_messages_with_document_and_tool_result():
+    counter = AnthropicTokenCounter()
+    base = counter.count_messages(
+        [{"role": "user", "content": [{"type": "text", "text": "hello"}]}]
+    )
+    enriched = counter.count_messages(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hello"},
+                    {
+                        "type": "document",
+                        "title": "Spec",
+                        "context": "API reference",
+                        "source": {
+                            "type": "text",
+                            "media_type": "text/plain",
+                            "data": "This is a longer document body used for counting.",
+                        },
+                    },
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_123",
+                        "name": "get_weather",
+                        "input": {"city": "Shanghai"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_123",
+                        "content": [{"type": "text", "text": "22C and sunny"}],
+                    }
+                ],
+            },
+        ]
+    )
+    assert enriched > base

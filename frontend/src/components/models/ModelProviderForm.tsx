@@ -5,10 +5,10 @@
 
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
-import { useForm, Controller, useFieldArray } from 'react-hook-form';
+import { useForm, Controller, useFieldArray, useWatch } from 'react-hook-form';
 import {
   Dialog,
   DialogContent,
@@ -18,6 +18,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -41,6 +42,7 @@ import { BillingDisplay } from '@/components/models/BillingDisplay';
 import { ModelProviderBillingFields } from '@/components/models/ModelProviderBillingFields';
 import { toast } from 'sonner';
 import { getModelProviderPricingHistory } from '@/lib/api';
+import { getPriceHistoryFormValues } from '@/lib/modelProviderPricingHistory';
 import { useProviderModels } from '@/lib/hooks';
 import { getProviderProtocolLabel, useProviderProtocolConfigs } from '@/lib/providerProtocols';
 import {
@@ -49,7 +51,7 @@ import {
   ModelMappingProviderUpdate,
   ModelProviderPricingHistoryItem,
   ModelType,
-  Provider,
+  ProviderName,
   RuleSet,
 } from '@/types';
 
@@ -61,7 +63,7 @@ interface ModelProviderFormProps {
   /** Current requested model name */
   requestedModel: string;
   /** Available provider list */
-  providers: Provider[];
+  providers: ProviderName[];
   /** Default prices from model fallback (for create mode prefill) */
   defaultPrices?: { input_price?: number | null; output_price?: number | null };
   /** Mapping data for edit mode */
@@ -124,7 +126,6 @@ export function ModelProviderForm({
     handleSubmit,
     reset,
     setValue,
-    watch,
     control,
     formState: { errors },
   } = useForm<FormData>({
@@ -152,14 +153,15 @@ export function ModelProviderForm({
     name: 'tiers',
   });
 
-  const providerId = watch('provider_id');
-  const isActive = watch('is_active');
-  const billingMode = watch('billing_mode');
-  const cacheBillingEnabled = watch('cache_billing_enabled');
-  const targetModelName = watch('target_model_name');
+  const providerId = useWatch({ control, name: 'provider_id' });
+  const isActive = useWatch({ control, name: 'is_active' });
+  const billingMode = useWatch({ control, name: 'billing_mode' });
+  const cacheBillingEnabled = useWatch({ control, name: 'cache_billing_enabled' });
+  const targetModelName = useWatch({ control, name: 'target_model_name' });
   const supportsBilling = modelType === 'chat' || modelType === 'embedding' || modelType === 'images';
   const [providerModels, setProviderModels] = useState<string[]>([]);
   const [providerModelDialogOpen, setProviderModelDialogOpen] = useState(false);
+  const [providerModelSearch, setProviderModelSearch] = useState('');
   const [selectedProviderModel, setSelectedProviderModel] = useState('');
   const [historyLoading, setHistoryLoading] = useState(false);
   const [priceHistoryDialogOpen, setPriceHistoryDialogOpen] = useState(false);
@@ -168,6 +170,15 @@ export function ModelProviderForm({
   );
   const [selectedPriceHistoryId, setSelectedPriceHistoryId] = useState<number | null>(null);
   const providerModelQuery = useProviderModels(Number(providerId), { enabled: false });
+  const filteredProviderModels = useMemo(() => {
+    const keyword = providerModelSearch.trim().toLowerCase();
+    if (!keyword) {
+      return providerModels;
+    }
+    return providerModels.filter((modelName) => modelName.toLowerCase().includes(keyword));
+  }, [providerModelSearch, providerModels]);
+  const canUseSelectedProviderModel =
+    !!selectedProviderModel && filteredProviderModels.includes(selectedProviderModel);
 
   // Fill form data in edit mode
   useEffect(() => {
@@ -292,12 +303,13 @@ export function ModelProviderForm({
     }
     const models = data.models || [];
     setProviderModels(models);
+    setProviderModelSearch('');
     setSelectedProviderModel(models[0] || '');
     setProviderModelDialogOpen(true);
   };
 
   const handleConfirmProviderModel = () => {
-    if (!selectedProviderModel) {
+    if (!canUseSelectedProviderModel) {
       return;
     }
     setValue('target_model_name', selectedProviderModel, {
@@ -308,35 +320,16 @@ export function ModelProviderForm({
   };
 
   const applyPriceHistory = (item: ModelProviderPricingHistoryItem) => {
-    const resolvedBillingMode = (item.billing_mode || 'token_flat') as FormData['billing_mode'];
-    setValue('billing_mode', resolvedBillingMode);
-    if (resolvedBillingMode === 'per_request') {
-      setValue('per_request_price', String(item.per_request_price ?? 0));
-      return;
-    }
-    if (resolvedBillingMode === 'per_image') {
-      setValue('per_image_price', String(item.per_image_price ?? 0));
-      return;
-    }
-    if (resolvedBillingMode === 'token_tiered') {
-      const tiers =
-        item.tiered_pricing && item.tiered_pricing.length > 0
-          ? item.tiered_pricing.map((tier) => ({
-              max_input_tokens:
-                tier.max_input_tokens === null || tier.max_input_tokens === undefined
-                  ? ''
-                  : String(tier.max_input_tokens),
-              input_price: String(tier.input_price ?? 0),
-              output_price: String(tier.output_price ?? 0),
-              cached_input_price: '',
-              cached_output_price: '',
-            }))
-          : [{ max_input_tokens: '', input_price: '0', output_price: '0', cached_input_price: '', cached_output_price: '' }];
-      setValue('tiers', tiers);
-      return;
-    }
-    setValue('input_price', String(item.input_price ?? 0));
-    setValue('output_price', String(item.output_price ?? 0));
+    const formValues = getPriceHistoryFormValues(item);
+    setValue('billing_mode', formValues.billing_mode as FormData['billing_mode']);
+    setValue('input_price', formValues.input_price);
+    setValue('output_price', formValues.output_price);
+    setValue('per_request_price', formValues.per_request_price);
+    setValue('per_image_price', formValues.per_image_price);
+    setValue('tiers', formValues.tiers);
+    setValue('cache_billing_enabled', formValues.cache_billing_enabled);
+    setValue('cached_input_price', formValues.cached_input_price);
+    setValue('cached_output_price', formValues.cached_output_price);
   };
 
   const handleLoadPriceHistory = async () => {
@@ -592,7 +585,16 @@ export function ModelProviderForm({
                 <SelectContent>
                   {providers.map((provider) => (
                     <SelectItem key={provider.id} value={String(provider.id)}>
-                      {provider.name} ({getProviderProtocolLabel(provider.protocol, protocolConfigs)})
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="truncate">
+                          {provider.name} ({getProviderProtocolLabel(provider.protocol, protocolConfigs)})
+                        </span>
+                        {!provider.is_active && (
+                          <Badge variant="warning" className="shrink-0 px-1.5 py-0 text-[10px]">
+                            {t('providerForm.providerDisabled')}
+                          </Badge>
+                        )}
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -732,14 +734,29 @@ export function ModelProviderForm({
             <DialogTitle>{t('providerForm.selectProviderModelTitle')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
+            <div className="space-y-2">
+              <Label htmlFor="provider-model-search">
+                {t('providerForm.providerModelSearch')}
+              </Label>
+              <Input
+                id="provider-model-search"
+                placeholder={t('providerForm.providerModelSearchPlaceholder')}
+                value={providerModelSearch}
+                onChange={(event) => setProviderModelSearch(event.target.value)}
+              />
+            </div>
             <div className="rounded-md border p-2 max-h-64 overflow-y-auto">
               {providerModels.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   {t('providerForm.noProviderModels')}
                 </p>
+              ) : filteredProviderModels.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  {t('providerForm.noProviderModelsMatched')}
+                </p>
               ) : (
                 <div className="space-y-1">
-                  {providerModels.map((modelName) => {
+                  {filteredProviderModels.map((modelName) => {
                     const isSelected = modelName === selectedProviderModel;
                     return (
                       <button
@@ -771,7 +788,7 @@ export function ModelProviderForm({
             <Button
               type="button"
               onClick={handleConfirmProviderModel}
-              disabled={!selectedProviderModel}
+              disabled={!canUseSelectedProviderModel}
             >
               {t('providerForm.useSelectedModel')}
             </Button>

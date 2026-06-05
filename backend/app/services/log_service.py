@@ -72,6 +72,43 @@ class LogService:
                 code="log_not_found",
             )
         return log
+
+    async def get_by_trace_id(self, trace_id: str) -> RequestLogModel:
+        """
+        Get Log Details by trace ID
+
+        Args:
+            trace_id: Request trace ID
+
+        Returns:
+            RequestLogModel: Log details
+
+        Raises:
+            NotFoundError: Log not found
+        """
+        log = await self.repo.get_by_trace_id(trace_id)
+        if not log:
+            raise NotFoundError(
+                message=f"Request log with trace_id {trace_id} not found",
+                code="log_not_found",
+            )
+        return log
+
+    async def find_latest_retry_candidate(
+        self,
+        *,
+        min_id: int,
+        api_key_id: int,
+        request_path: str,
+    ) -> RequestLogModel | None:
+        """
+        Find the latest retry candidate created after the original log.
+        """
+        return await self.repo.find_latest_retry_candidate(
+            min_id=min_id,
+            api_key_id=api_key_id,
+            request_path=request_path,
+        )
     
     async def query(
         self, query: RequestLogQuery
@@ -133,6 +170,28 @@ class LogService:
             return deleted_count
         except Exception as e:
             logger.error(f"Failed to cleanup old logs: {str(e)}", exc_info=True)
+            raise
+
+    async def cleanup_old_log_details(self, retention_days: int) -> int:
+        """
+        Clean up old log detail rows while keeping summary logs.
+
+        Args:
+            retention_days: Number of days to keep request detail data
+
+        Returns:
+            int: Number of deleted detail rows
+        """
+        try:
+            deleted_count = await self.repo.cleanup_old_log_details(retention_days)
+            logger.info(
+                "Log detail cleanup completed: %s detail rows older than %s days deleted",
+                deleted_count,
+                retention_days,
+            )
+            return deleted_count
+        except Exception as e:
+            logger.error(f"Failed to cleanup old log details: {str(e)}", exc_info=True)
             raise
 
     async def get_cost_stats(self, query: LogCostStatsQuery) -> LogCostStatsResponse:

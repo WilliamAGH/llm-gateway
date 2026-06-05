@@ -6,10 +6,12 @@ Implements Anthropic-compatible request forwarding.
 
 import json
 import logging
+from urllib.parse import urlparse
 from typing import Any, AsyncGenerator, Optional
 
 import httpx
 
+from app.common.upstream_url import build_upstream_url
 from app.common.timer import Timer
 from app.config import get_settings
 from app.providers.base import ProviderClient, ProviderResponse
@@ -32,6 +34,52 @@ class AnthropicClient(ProviderClient):
         """Initialize client"""
         settings = get_settings()
         self.timeout = settings.HTTP_TIMEOUT
+
+    @staticmethod
+    def _is_minimax_base_url(base_url: str) -> bool:
+        """Detect MiniMax Anthropic-compatible endpoints by hostname."""
+        try:
+            hostname = (urlparse(base_url).hostname or "").lower()
+        except Exception:
+            return False
+        return "minimax" in hostname
+
+    def _sanitize_minimax_headers(
+        self,
+        headers: dict[str, str],
+    ) -> dict[str, str]:
+        """
+        Strip Anthropic-specific experimental headers that MiniMax does not
+        document as supported on its compatibility endpoint.
+        """
+        sanitized = dict(headers)
+        for key in list(sanitized.keys()):
+            lowered = key.lower()
+            if lowered == "anthropic-beta":
+                del sanitized[key]
+            elif lowered == "anthropic-dangerous-direct-browser-access":
+                del sanitized[key]
+            elif lowered.startswith("x-stainless-"):
+                del sanitized[key]
+            elif lowered == "x-app":
+                del sanitized[key]
+        return sanitized
+
+    def _sanitize_minimax_body(self, body: dict[str, Any]) -> dict[str, Any]:
+        """
+        Strip high-risk Anthropic-only fields that are ignored or unstable on
+        MiniMax's Anthropic compatibility layer to reduce long-context failures.
+        """
+        sanitized = dict(body)
+        for key in (
+            "context_management",
+            "mcp_servers",
+            "container",
+            "service_tier",
+            "thinking",
+        ):
+            sanitized.pop(key, None)
+        return sanitized
     
     def _prepare_headers(
         self,
@@ -55,7 +103,16 @@ class AnthropicClient(ProviderClient):
         new_headers = dict(headers)
         
         # Remove original authentication headers and auto-generated headers
-        keys_to_remove = ["authorization", "x-api-key", "api-key", "content-length", "host", "content-type", "accept-encoding"]
+        keys_to_remove = [
+            "authorization",
+            "x-api-key",
+            "api-key",
+            "x-user-id",
+            "content-length",
+            "host",
+            "content-type",
+            "accept-encoding",
+        ]
         for key in list(new_headers.keys()):
             if key.lower() in keys_to_remove:
                 del new_headers[key]
@@ -71,6 +128,10 @@ class AnthropicClient(ProviderClient):
         # Merge extra headers (overwrite existing)
         if extra_headers:
             new_headers.update(extra_headers)
+
+        for key in list(new_headers.keys()):
+            if key.lower() == "x-user-id":
+                del new_headers[key]
         
         return new_headers
     
@@ -104,15 +165,12 @@ class AnthropicClient(ProviderClient):
         Returns:
             ProviderResponse: Provider response
         """
-        cleaned_base = base_url.rstrip('/')
-        cleaned_path = path
-        if cleaned_path.startswith('/v1/'):
-            cleaned_path = cleaned_path[3:]
-        elif cleaned_path == '/v1':
-            cleaned_path = ''
-        url = f"{cleaned_base}{cleaned_path}"
+        url = build_upstream_url(base_url, path)
         prepared_body = self._prepare_body(body, target_model)
         prepared_headers = self._prepare_headers(headers, api_key, extra_headers)
+        if self._is_minimax_base_url(base_url):
+            prepared_body = self._sanitize_minimax_body(prepared_body)
+            prepared_headers = self._sanitize_minimax_headers(prepared_headers)
         prepared_headers["Content-Type"] = "application/json"
         
         logger.debug(
@@ -193,13 +251,7 @@ class AnthropicClient(ProviderClient):
         """
         List available models from Anthropic-compatible provider
         """
-        cleaned_base = base_url.rstrip('/')
-        cleaned_path = "/v1/models"
-        if cleaned_path.startswith('/v1/'):
-            cleaned_path = cleaned_path[3:]
-        elif cleaned_path == '/v1':
-            cleaned_path = ''
-        url = f"{cleaned_base}{cleaned_path}"
+        url = build_upstream_url(base_url, "/v1/models")
         prepared_headers = self._prepare_headers({}, api_key, extra_headers)
 
         logger.debug(
@@ -292,15 +344,12 @@ class AnthropicClient(ProviderClient):
         Yields:
             tuple[bytes, ProviderResponse]: (Data chunk, Response info)
         """
-        cleaned_base = base_url.rstrip('/')
-        cleaned_path = path
-        if cleaned_path.startswith('/v1/'):
-            cleaned_path = cleaned_path[3:]
-        elif cleaned_path == '/v1':
-            cleaned_path = ''
-        url = f"{cleaned_base}{cleaned_path}"
+        url = build_upstream_url(base_url, path)
         prepared_body = self._prepare_body(body, target_model)
         prepared_headers = self._prepare_headers(headers, api_key, extra_headers)
+        if self._is_minimax_base_url(base_url):
+            prepared_body = self._sanitize_minimax_body(prepared_body)
+            prepared_headers = self._sanitize_minimax_headers(prepared_headers)
         prepared_headers["Content-Type"] = "application/json"
         
         logger.debug(

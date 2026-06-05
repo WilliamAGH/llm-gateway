@@ -7,6 +7,7 @@ import { get, post } from './client';
 export interface AuthStatusResponse {
   enabled: boolean;
   authenticated: boolean;
+  enable_view_api_keys: boolean;
 }
 
 export interface LoginResponse {

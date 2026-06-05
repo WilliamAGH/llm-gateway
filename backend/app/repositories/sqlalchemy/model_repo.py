@@ -152,6 +152,7 @@ class SQLAlchemyModelRepository(ModelRepository):
         target_model_name: Optional[str] = None,
         model_type: Optional[str] = None,
         strategy: Optional[str] = None,
+        sort_by: Optional[str] = None,
     ) -> tuple[list[ModelMapping], int]:
         """Get Model Mapping list"""
         query = select(ModelMappingORM)
@@ -191,8 +192,17 @@ class SQLAlchemyModelRepository(ModelRepository):
         total_result = await self.session.execute(count_query)
         total = total_result.scalar() or 0
         
-        # Pagination
-        query = query.order_by(ModelMappingORM.requested_model)
+        # Default order keeps newest models first; name sorting is opt-in.
+        if sort_by == "requested_model_asc":
+            query = query.order_by(ModelMappingORM.requested_model.asc())
+        elif sort_by == "requested_model_desc":
+            query = query.order_by(ModelMappingORM.requested_model.desc())
+        else:
+            query = query.order_by(
+                ModelMappingORM.created_at.desc(),
+                ModelMappingORM.requested_model.desc(),
+            )
+
         query = query.offset((page - 1) * page_size).limit(page_size)
         
         result = await self.session.execute(query)

@@ -267,3 +267,50 @@ async def test_bulk_upgrade_per_image_billing(db_session):
     assert mappings[0].target_model_name == "new-img"
     assert mappings[0].billing_mode == "per_image"
     assert mappings[0].per_image_price == 0.06
+
+
+@pytest.mark.asyncio
+async def test_get_provider_pricing_history_resolves_inherited_model_billing(db_session):
+    model_repo = SQLAlchemyModelRepository(db_session)
+    provider_repo = SQLAlchemyProviderRepository(db_session)
+    service = ModelService(model_repo, provider_repo)
+
+    await model_repo.create_mapping(
+        ModelMappingCreate(
+            requested_model="gpt-4o-mini",
+            billing_mode="token_flat",
+            input_price=0.15,
+            output_price=0.6,
+            cache_billing_enabled=True,
+            cached_input_price=0.05,
+            cached_output_price=0.2,
+        )
+    )
+    provider = await provider_repo.create(
+        ProviderCreate(
+            name="p-history",
+            base_url="https://example.com",
+            protocol="openai",
+            api_type="chat",
+        )
+    )
+
+    await service.create_provider_mapping(
+        ModelMappingProviderCreate(
+            requested_model="gpt-4o-mini",
+            provider_id=provider.id,
+            target_model_name="gpt-4o-mini",
+            billing_mode="inherit_model_default",
+        )
+    )
+
+    history = await service.get_provider_pricing_history("gpt-4o-mini")
+
+    assert len(history) == 1
+    assert history[0].billing_mode == "inherit_model_default"
+    assert history[0].resolved_billing_mode == "token_flat"
+    assert history[0].resolved_input_price == 0.15
+    assert history[0].resolved_output_price == 0.6
+    assert history[0].resolved_cache_billing_enabled is True
+    assert history[0].resolved_cached_input_price == 0.05
+    assert history[0].resolved_cached_output_price == 0.2

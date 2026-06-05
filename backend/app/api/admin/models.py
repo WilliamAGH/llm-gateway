@@ -6,7 +6,7 @@ Provides CRUD endpoints for Model Mappings and Model-Provider Mappings.
 
 import json
 import time
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import JSONResponse
@@ -376,6 +376,9 @@ async def list_models(
     ),
     model_type: Optional[str] = Query(None, description="Filter by model type"),
     strategy: Optional[str] = Query(None, description="Filter by strategy"),
+    sort_by: Optional[Literal["requested_model_asc", "requested_model_desc"]] = Query(
+        None, description="Sort by model fields"
+    ),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=1000, description="Items per page"),
 ):
@@ -391,6 +394,7 @@ async def list_models(
             target_model_name=target_model_name,
             model_type=model_type,
             strategy=strategy,
+            sort_by=sort_by,
         )
         return PaginatedModelResponse(
             items=items,
@@ -490,6 +494,7 @@ async def test_model(
                 api_key_name=None,
                 request_protocol=data.protocol,
                 path=path,
+                request_url=path,
                 method="POST",
                 headers=headers,
                 body=body,
@@ -518,6 +523,7 @@ async def test_model(
             api_key_name=None,
             request_protocol=data.protocol,
             path=path,
+            request_url=path,
             method="POST",
             headers=headers,
             body=body,

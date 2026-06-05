@@ -3,16 +3,20 @@
  * Corresponds to backend /api/admin/logs route
  */
 
-import { get } from './client';
+import { get, post } from './client';
 import {
   RequestLog,
   RequestLogDetail,
   LogQueryParams,
   LogCostStatsResponse,
   PaginatedResponse,
+  RetryLogResponse,
+  LogPlaygroundExecuteRequest,
 } from '@/types';
+import { getStoredAdminToken } from './client';
 
 const BASE_URL = '/api/admin/logs';
+const RETRY_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
  * Query Request Logs List
@@ -40,6 +44,27 @@ export async function getLogDetail(id: number): Promise<RequestLogDetail> {
   return get<RequestLogDetail>(`${BASE_URL}/${id}`);
 }
 
+export async function retryLog(id: number): Promise<RetryLogResponse> {
+  return post<RetryLogResponse>(`${BASE_URL}/${id}/retry`, undefined, {
+    timeout: RETRY_TIMEOUT_MS,
+  });
+}
+
+export async function executeLogPlaygroundRequest(
+  id: number,
+  data: LogPlaygroundExecuteRequest
+): Promise<Response> {
+  const token = getStoredAdminToken();
+  return fetch(`${BASE_URL}/${id}/playground`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(data),
+  });
+}
+
 /**
  * Get cost stats for log list filters
  */
@@ -55,6 +80,7 @@ export async function getLogCostStats(
         provider_id: params.provider_id,
         api_key_id: params.api_key_id,
         api_key_name: params.api_key_name,
+        user_id: params.user_id,
         tz_offset_minutes: params.tz_offset_minutes,
         bucket: params.bucket,
         bucket_minutes: params.bucket_minutes,

@@ -125,6 +125,7 @@ async def test_protocol_hooks_apply_to_non_stream_flow():
                     api_key_name="k",
                     request_protocol="openai",
                     path="/v1/chat/completions",
+                    request_url="/v1/chat/completions",
                     method="POST",
                     headers={},
                     body={"model": "test-model", "messages": []},
@@ -206,6 +207,7 @@ async def test_protocol_hooks_apply_to_image_non_stream_flow():
                     api_key_name="k",
                     request_protocol="openai",
                     path="/v1/images/generations",
+                    request_url="/v1/images/generations",
                     method="POST",
                     headers={},
                     body={"model": "test-image-model", "prompt": "a cat"},
@@ -286,6 +288,7 @@ async def test_protocol_hooks_apply_to_stream_chunks():
                     api_key_name="k",
                     request_protocol="openai",
                     path="/v1/chat/completions",
+                    request_url="/v1/chat/completions",
                     method="POST",
                     headers={},
                     body={"model": "test-model", "stream": True, "messages": []},
@@ -299,6 +302,169 @@ async def test_protocol_hooks_apply_to_stream_chunks():
 
     assert chunks == [b'data: {"choices":[{"delta":{"content":"hi!"}}]}\n\n']
     service.log_repo.create.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_convert_request_receives_candidate_protocol_not_resolved_implementation():
+    """Test that convert_request_for_supplier receives candidate.protocol (frontend) not the resolved implementation.
+
+    This is a regression test: previously the code passed supplier_protocol (the resolved
+    implementation protocol) instead of candidate.protocol (the actual frontend protocol).
+    For providers like deepseek that have a frontend protocol different from their
+    implementation protocol, this matters because deepseek-specific normalization
+    only triggers when the frontend protocol is detected.
+    """
+    now = utc_now()
+    model_mapping = ModelMapping(
+        requested_model="test-model",
+        strategy="round_robin",
+        matching_rules=None,
+        capabilities=None,
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    candidate = CandidateProvider(
+        provider_id=1,
+        provider_name="p-deepseek",
+        base_url="https://api.deepseek.com",
+        protocol="deepseek",
+        api_key="sk-test",
+        target_model="deepseek-chat",
+        priority=0,
+        weight=1,
+    )
+
+    service = ProxyService(
+        model_repo=AsyncMock(),
+        provider_repo=AsyncMock(),
+        log_repo=AsyncMock(),
+        protocol_hooks=ProtocolConversionHooks(),
+    )
+    service._resolve_candidates = AsyncMock(
+        return_value=(model_mapping, [candidate], 0, "openai", {})
+    )
+
+    captured_kwargs: dict = {}
+
+    def fake_convert_request_for_supplier(*, body, supplier_protocol, **kwargs):
+        captured_kwargs["supplier_protocol"] = supplier_protocol
+        captured_kwargs["body"] = body
+        return "/v1/chat/completions", {"converted": True}
+
+    fake_client = AsyncMock()
+    fake_client.forward = AsyncMock(
+        return_value=ProviderResponse(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body={"response": "ok"},
+        )
+    )
+
+    with patch(
+        "app.services.proxy_service.convert_request_for_supplier",
+        side_effect=fake_convert_request_for_supplier,
+    ):
+        with patch(
+            "app.services.proxy_service.get_provider_client",
+            return_value=fake_client,
+        ):
+            await service.process_request(
+                api_key_id=1,
+                api_key_name="k",
+                request_protocol="openai",
+                path="/v1/chat/completions",
+                request_url="/v1/chat/completions",
+                method="POST",
+                headers={},
+                body={"model": "test-model", "messages": []},
+            )
+
+    assert (
+        captured_kwargs["supplier_protocol"] == "deepseek"
+    ), f"Expected candidate.protocol='deepseek', got '{captured_kwargs['supplier_protocol']}'"
+
+
+@pytest.mark.asyncio
+async def test_stream_convert_request_receives_candidate_protocol_not_resolved_implementation():
+    """Test that stream flow also passes candidate.protocol to convert_request_for_supplier."""
+    now = utc_now()
+    model_mapping = ModelMapping(
+        requested_model="test-model",
+        strategy="round_robin",
+        matching_rules=None,
+        capabilities=None,
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    candidate = CandidateProvider(
+        provider_id=1,
+        provider_name="p-deepseek",
+        base_url="https://api.deepseek.com",
+        protocol="deepseek",
+        api_key="sk-test",
+        target_model="deepseek-chat",
+        priority=0,
+        weight=1,
+    )
+
+    service = ProxyService(
+        model_repo=AsyncMock(),
+        provider_repo=AsyncMock(),
+        log_repo=AsyncMock(),
+        protocol_hooks=ProtocolConversionHooks(),
+    )
+    service._resolve_candidates = AsyncMock(
+        return_value=(model_mapping, [candidate], 0, "openai", {})
+    )
+
+    captured_kwargs: dict = {}
+
+    def fake_convert_request_for_supplier(*, body, supplier_protocol, **kwargs):
+        captured_kwargs["supplier_protocol"] = supplier_protocol
+        return "/v1/chat/completions", {"converted": True}
+
+    def forward_stream(**kwargs):
+        async def gen():
+            response = ProviderResponse(status_code=200, headers={})
+            yield b'data: {"type":"message_start"}\n\n', response
+
+        return gen()
+
+    fake_client = AsyncMock()
+    fake_client.forward_stream = forward_stream
+
+    async def fake_convert_stream_for_user(*, upstream, **kwargs):
+        async for chunk in upstream:
+            yield chunk
+
+    with patch(
+        "app.services.proxy_service.convert_request_for_supplier",
+        side_effect=fake_convert_request_for_supplier,
+    ):
+        with patch(
+            "app.services.proxy_service.convert_stream_for_user",
+            side_effect=fake_convert_stream_for_user,
+        ):
+            with patch(
+                "app.services.proxy_service.get_provider_client",
+                return_value=fake_client,
+            ):
+                await service.process_request_stream(
+                    api_key_id=1,
+                    api_key_name="k",
+                    request_protocol="openai",
+                    path="/v1/chat/completions",
+                    request_url="/v1/chat/completions",
+                    method="POST",
+                    headers={},
+                    body={"model": "test-model", "stream": True, "messages": []},
+                )
+
+    assert (
+        captured_kwargs["supplier_protocol"] == "deepseek"
+    ), f"Expected candidate.protocol='deepseek', got '{captured_kwargs['supplier_protocol']}'"
 
 
 def _create_kv_model(value: str) -> KeyValueModel:
@@ -361,8 +527,8 @@ async def test_inject_tool_call_extra_content_for_openai_protocol():
         ],
     }
 
-    result = await hooks.after_request_conversion(
-        supplier_body=supplier_body,
+    result = await hooks.before_request_conversion(
+        body=supplier_body,
         request_protocol="openai",
         supplier_protocol="openai",
     )
@@ -380,9 +546,20 @@ async def test_inject_tool_call_extra_content_for_openai_protocol():
 
 
 @pytest.mark.asyncio
-async def test_inject_tool_call_extra_content_skipped_for_non_openai_protocol():
-    """Test that extra_content injection is skipped for non-openai protocols."""
+async def test_inject_tool_call_extra_content_in_after_request_for_non_openai():
+    """Test that extra_content is injected in after_request if supplier is openai and request is not."""
     mock_kv_repo = AsyncMock()
+    extra_content_data = {"google": {"thought_signature": "sig"}}
+    
+    async def mock_get(key: str):
+        if key == "tool_call_extra:call-123":
+            from app.common.time import utc_now
+            from app.domain.kv_store import KeyValueModel
+            import json
+            return KeyValueModel(key="test_key", value=json.dumps(extra_content_data), expires_at=None, created_at=utc_now(), updated_at=utc_now())
+        return None
+        
+    mock_kv_repo.get.side_effect = mock_get
     hooks = ProtocolConversionHooks(kv_repo=mock_kv_repo)
 
     supplier_body = {
@@ -398,12 +575,44 @@ async def test_inject_tool_call_extra_content_skipped_for_non_openai_protocol():
 
     result = await hooks.after_request_conversion(
         supplier_body=supplier_body,
-        request_protocol="openai",
-        supplier_protocol="anthropic",
+        request_protocol="anthropic",
+        supplier_protocol="openai",
+    )
+
+    mock_kv_repo.get.assert_called()
+    assert "extra_content" in result["messages"][0]["tool_calls"][0]
+
+@pytest.mark.asyncio
+async def test_inject_tool_call_extra_content_skipped_for_non_openai_to_non_openai():
+    """Test that extra_content injection is skipped for non-openai to non-openai."""
+    mock_kv_repo = AsyncMock()
+    hooks = ProtocolConversionHooks(kv_repo=mock_kv_repo)
+
+    supplier_body = {
+        "messages": [
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "call-123", "type": "function", "function": {"name": "test"}},
+                ],
+            },
+        ],
+    }
+
+    result1 = await hooks.before_request_conversion(
+        body=supplier_body,
+        request_protocol="anthropic",
+        supplier_protocol="gemini",
+    )
+    result2 = await hooks.after_request_conversion(
+        supplier_body=supplier_body,
+        request_protocol="anthropic",
+        supplier_protocol="gemini",
     )
 
     mock_kv_repo.get.assert_not_called()
-    assert "extra_content" not in result["messages"][0]["tool_calls"][0]
+    assert "extra_content" not in result1["messages"][0]["tool_calls"][0]
+    assert "extra_content" not in result2["messages"][0]["tool_calls"][0]
 
 
 @pytest.mark.asyncio
@@ -422,8 +631,8 @@ async def test_inject_tool_call_extra_content_skipped_without_kv_repo():
         ],
     }
 
-    result = await hooks.after_request_conversion(
-        supplier_body=supplier_body,
+    result = await hooks.before_request_conversion(
+        body=supplier_body,
         request_protocol="openai",
         supplier_protocol="openai",
     )
@@ -450,8 +659,8 @@ async def test_inject_tool_call_extra_content_handles_missing_cache():
         ],
     }
 
-    result = await hooks.after_request_conversion(
-        supplier_body=supplier_body,
+    result = await hooks.before_request_conversion(
+        body=supplier_body,
         request_protocol="openai",
         supplier_protocol="openai",
     )
@@ -479,8 +688,8 @@ async def test_inject_tool_call_extra_content_handles_kv_error():
         ],
     }
 
-    result = await hooks.after_request_conversion(
-        supplier_body=supplier_body,
+    result = await hooks.before_request_conversion(
+        body=supplier_body,
         request_protocol="openai",
         supplier_protocol="openai",
     )
@@ -505,8 +714,8 @@ async def test_inject_tool_call_extra_content_skips_tool_call_without_id():
         ],
     }
 
-    result = await hooks.after_request_conversion(
-        supplier_body=supplier_body,
+    result = await hooks.before_request_conversion(
+        body=supplier_body,
         request_protocol="openai",
         supplier_protocol="openai",
     )
@@ -540,7 +749,7 @@ async def test_cache_tool_call_extra_content_from_stream():
     }
     chunk = f"data: {json.dumps(chunk_data)}\n\n".encode("utf-8")
 
-    result = await hooks.before_stream_chunk_conversion(
+    result = await hooks.after_stream_chunk_conversion(
         chunk=chunk,
         request_protocol="openai",
         supplier_protocol="gemini",
@@ -575,7 +784,7 @@ async def test_cache_tool_call_extra_content_skipped_without_kv_repo():
     }
     chunk = f"data: {json.dumps(chunk_data)}\n\n".encode("utf-8")
 
-    result = await hooks.before_stream_chunk_conversion(
+    result = await hooks.after_stream_chunk_conversion(
         chunk=chunk,
         request_protocol="openai",
         supplier_protocol="gemini",
@@ -631,8 +840,9 @@ async def test_cache_tool_call_extra_content_from_non_stream_response():
         },
     }
 
-    result = await hooks.before_response_conversion(
-        supplier_body=supplier_body,
+    result = await hooks.after_response_conversion(
+        response_body=supplier_body,
+        
         request_protocol="openai",
         supplier_protocol="gemini",
     )
@@ -641,6 +851,44 @@ async def test_cache_tool_call_extra_content_from_non_stream_response():
     call_args = mock_kv_repo.set.call_args
     assert call_args[0][0] == "tool_call_extra:function-call-8949365993964308019"
     assert json.loads(call_args[0][1]) == extra_content
+    assert result == supplier_body
+
+
+@pytest.mark.asyncio
+async def test_cache_non_stream_response_handles_null_tool_calls():
+    """OpenAI-compatible providers may return tool_calls: null."""
+    mock_kv_repo = AsyncMock()
+    hooks = ProtocolConversionHooks(kv_repo=mock_kv_repo)
+
+    supplier_body = {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello",
+                    "reasoning_content": "Thinking",
+                    "tool_calls": None,
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 202,
+            "prompt_tokens": 252,
+            "total_tokens": 454,
+            "completion_tokens_details": {"reasoning_tokens": 151},
+            "prompt_tokens_details": {"cached_tokens": 192},
+        },
+    }
+
+    result = await hooks.before_response_conversion(
+        supplier_body=supplier_body,
+        request_protocol="openai",
+        supplier_protocol="openai",
+    )
+
+    mock_kv_repo.set.assert_not_called()
     assert result == supplier_body
 
 
@@ -678,8 +926,9 @@ async def test_cache_tool_call_extra_content_from_non_stream_response_multiple_t
         ],
     }
 
-    result = await hooks.before_response_conversion(
-        supplier_body=supplier_body,
+    result = await hooks.after_response_conversion(
+        response_body=supplier_body,
+        
         request_protocol="openai",
         supplier_protocol="gemini",
     )
@@ -713,8 +962,9 @@ async def test_cache_non_stream_response_skipped_without_kv_repo():
         ]
     }
 
-    result = await hooks.before_response_conversion(
-        supplier_body=supplier_body,
+    result = await hooks.after_response_conversion(
+        response_body=supplier_body,
+        
         request_protocol="openai",
         supplier_protocol="gemini",
     )
@@ -730,14 +980,42 @@ async def test_cache_non_stream_response_skipped_for_non_dict_body():
 
     supplier_body = "not a dict"
 
-    result = await hooks.before_response_conversion(
-        supplier_body=supplier_body,
+    result = await hooks.after_response_conversion(
+        response_body=supplier_body,
+        
         request_protocol="openai",
         supplier_protocol="gemini",
     )
 
     mock_kv_repo.set.assert_not_called()
     assert result == supplier_body
+
+
+@pytest.mark.asyncio
+async def test_inject_cached_content_handles_null_tool_calls():
+    """Requests with tool_calls: null should pass through cache injection."""
+    mock_kv_repo = AsyncMock()
+    hooks = ProtocolConversionHooks(kv_repo=mock_kv_repo)
+
+    body = {
+        "model": "mimo-v2.5-pro",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": "Hello",
+                "tool_calls": None,
+            }
+        ],
+    }
+
+    result = await hooks.before_request_conversion(
+        body=body,
+        request_protocol="openai",
+        supplier_protocol="openai",
+    )
+
+    mock_kv_repo.get.assert_not_called()
+    assert result == body
 
 
 @pytest.mark.asyncio
@@ -761,8 +1039,9 @@ async def test_cache_non_stream_response_skips_tool_call_without_id():
         ]
     }
 
-    result = await hooks.before_response_conversion(
-        supplier_body=supplier_body,
+    result = await hooks.after_response_conversion(
+        response_body=supplier_body,
+        
         request_protocol="openai",
         supplier_protocol="gemini",
     )
@@ -793,8 +1072,9 @@ async def test_cache_non_stream_response_skips_tool_call_without_extra_content()
         ]
     }
 
-    result = await hooks.before_response_conversion(
-        supplier_body=supplier_body,
+    result = await hooks.after_response_conversion(
+        response_body=supplier_body,
+        
         request_protocol="openai",
         supplier_protocol="gemini",
     )
@@ -826,8 +1106,9 @@ async def test_cache_non_stream_response_handles_kv_error():
         ]
     }
 
-    result = await hooks.before_response_conversion(
-        supplier_body=supplier_body,
+    result = await hooks.after_response_conversion(
+        response_body=supplier_body,
+        
         request_protocol="openai",
         supplier_protocol="gemini",
     )

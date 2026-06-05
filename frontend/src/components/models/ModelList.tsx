@@ -18,14 +18,16 @@ import {
 } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Pencil, Play, Server, Trash2 } from 'lucide-react';
-import { ModelMapping, ModelStats, ModelType } from '@/types';
+import { ArrowDown, ArrowUp, ArrowUpDown, Pencil, Play, Server, Trash2 } from 'lucide-react';
+import { ModelListSortBy, ModelMapping, ModelStats, ModelType } from '@/types';
 import { getActiveStatus, formatDuration } from '@/lib/utils';
 
 interface ModelListProps {
   /** Model mapping list data */
   models: ModelMapping[];
   statsByModel?: Record<string, ModelStats>;
+  requestedModelSort?: ModelListSortBy;
+  onRequestedModelSortChange: () => void;
   /** Edit callback */
   onEdit: (model: ModelMapping) => void;
   /** Delete callback */
@@ -42,6 +44,8 @@ interface ModelListProps {
 export function ModelList({
   models,
   statsByModel,
+  requestedModelSort,
+  onRequestedModelSortChange,
   onEdit,
   onDelete,
   onTest,
@@ -50,6 +54,12 @@ export function ModelList({
   const t = useTranslations('models');
   const tCommon = useTranslations('common');
   const router = useRouter();
+  const RequestedModelSortIcon =
+    requestedModelSort === 'requested_model_asc'
+      ? ArrowUp
+      : requestedModelSort === 'requested_model_desc'
+        ? ArrowDown
+        : ArrowUpDown;
 
   const getStrategyLabel = (strategy: ModelMapping['strategy']) => {
     switch (strategy) {
@@ -83,7 +93,16 @@ export function ModelList({
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>{t('list.columns.requestedModel')}</TableHead>
+          <TableHead>
+            <Button
+              variant="ghost"
+              className="-ml-3 h-8 px-3"
+              onClick={onRequestedModelSortChange}
+            >
+              <span>{t('list.columns.requestedModel')}</span>
+              <RequestedModelSortIcon className="ml-2 h-4 w-4" suppressHydrationWarning />
+            </Button>
+          </TableHead>
           <TableHead>{t('list.columns.type')}</TableHead>
           <TableHead>{t('list.columns.strategy')}</TableHead>
           <TableHead>{t('list.columns.providerCount')}</TableHead>

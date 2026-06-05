@@ -260,6 +260,8 @@ export function HomeCostStats() {
       stats={data}
       loading={isLoading}
       refreshing={isFetching}
+      withoutCard
+      hideTitle
       rangeLabel={rangeLabel}
       rangeDays={rangeDays}
       rangeStart={displayRange.start_time}

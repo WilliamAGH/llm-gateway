@@ -10,7 +10,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.time import ensure_utc, to_utc_naive, utc_now
-from app.db.models import ServiceProvider, ModelMappingProvider as ModelMappingProviderORM
+from app.db.models import ModelMappingProvider as ModelMappingProviderORM
+from app.db.models import ServiceProvider
 from app.domain.provider import Provider, ProviderCreate, ProviderUpdate
 from app.repositories.provider_repo import ProviderRepository
 
@@ -131,7 +132,27 @@ class SQLAlchemyProviderRepository(ProviderRepository):
         entities = result.scalars().all()
         
         return [self._to_domain(e) for e in entities], total
-    
+
+    async def get_name_list(
+        self,
+        is_active: Optional[bool] = None,
+    ) -> list[Provider]:
+        """Get Provider name list without pagination"""
+        query = select(ServiceProvider)
+
+        if is_active is not None:
+            query = query.where(ServiceProvider.is_active == is_active)
+
+        query = query.order_by(
+            func.lower(ServiceProvider.name).asc(),
+            ServiceProvider.name.asc(),
+        )
+
+        result = await self.session.execute(query)
+        entities = result.scalars().all()
+
+        return [self._to_domain(e) for e in entities]
+
     async def update(self, id: int, data: ProviderUpdate) -> Optional[Provider]:
         """Update Provider"""
         result = await self.session.execute(
@@ -162,7 +183,7 @@ class SQLAlchemyProviderRepository(ProviderRepository):
         
         if not entity:
             return False
-        
+
         await self.session.delete(entity)
         await self.session.commit()
         return True

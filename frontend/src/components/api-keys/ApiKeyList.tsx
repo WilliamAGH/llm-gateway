@@ -26,6 +26,8 @@ import { getRawKeyValue } from '@/lib/api/api-keys';
 interface ApiKeyListProps {
   /** API Key list data */
   apiKeys: ApiKey[];
+  /** Whether viewing/copying full API key is enabled */
+  canViewApiKeys: boolean;
   /** Edit callback */
   onEdit: (apiKey: ApiKey) => void;
   /** Delete callback */
@@ -37,6 +39,7 @@ interface ApiKeyListProps {
  */
 export function ApiKeyList({
   apiKeys,
+  canViewApiKeys,
   onEdit,
   onDelete,
 }: ApiKeyListProps) {
@@ -122,40 +125,44 @@ export function ApiKeyList({
               <TableCell>
                 <div className="flex items-center gap-2">
                   <code className="text-sm font-mono">
-                    {isVisible && rawKeyValue ? rawKeyValue : apiKey.key_value}
+                    {canViewApiKeys && isVisible && rawKeyValue ? rawKeyValue : apiKey.key_value}
                   </code>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
-                    onClick={() => toggleVisible(apiKey.id)}
-                    title={isVisible ? t('actions.hide') : t('actions.show')}
-                    disabled={isLoading}
-                  >
-                    {isLoading ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" suppressHydrationWarning />
-                    ) : isVisible ? (
-                      <EyeOff className="h-3.5 w-3.5" suppressHydrationWarning />
-                    ) : (
-                      <Eye className="h-3.5 w-3.5" suppressHydrationWarning />
-                    )}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
-                    onClick={() => handleCopy(apiKey)}
-                    title={t('actions.copy')}
-                    disabled={isLoading}
-                  >
-                    {isLoading ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" suppressHydrationWarning />
-                    ) : isCopied ? (
-                      <Check className="h-3.5 w-3.5 text-green-500" suppressHydrationWarning />
-                    ) : (
-                      <Copy className="h-3.5 w-3.5" suppressHydrationWarning />
-                    )}
-                  </Button>
+                  {canViewApiKeys && (
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => toggleVisible(apiKey.id)}
+                        title={isVisible ? t('actions.hide') : t('actions.show')}
+                        disabled={isLoading}
+                      >
+                        {isLoading ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" suppressHydrationWarning />
+                        ) : isVisible ? (
+                          <EyeOff className="h-3.5 w-3.5" suppressHydrationWarning />
+                        ) : (
+                          <Eye className="h-3.5 w-3.5" suppressHydrationWarning />
+                        )}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => handleCopy(apiKey)}
+                        title={t('actions.copy')}
+                        disabled={isLoading}
+                      >
+                        {isLoading ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" suppressHydrationWarning />
+                        ) : isCopied ? (
+                          <Check className="h-3.5 w-3.5 text-green-500" suppressHydrationWarning />
+                        ) : (
+                          <Copy className="h-3.5 w-3.5" suppressHydrationWarning />
+                        )}
+                      </Button>
+                    </>
+                  )}
                 </div>
               </TableCell>
               <TableCell className="font-mono text-sm">

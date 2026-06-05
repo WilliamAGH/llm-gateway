@@ -6,7 +6,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, useWatch } from 'react-hook-form';
 import { useTranslations } from 'next-intl';
 import { CircleHelp, Plus, Trash2 } from 'lucide-react';
 import {
@@ -95,7 +95,7 @@ export function ProviderForm({
     handleSubmit,
     reset,
     setValue,
-    watch,
+    control,
     formState: { errors },
   } = useForm<FormData>({
     defaultValues: {
@@ -112,11 +112,11 @@ export function ProviderForm({
   });
 
   // Watch form values
-  const protocol = watch('protocol');
-  const baseUrl = watch('base_url');
-  const isActive = watch('is_active');
-  const proxyEnabled = watch('proxy_enabled');
-  const noSuffix = watch('no_suffix');
+  const protocol = useWatch({ control, name: 'protocol' });
+  const baseUrl = useWatch({ control, name: 'base_url' });
+  const isActive = useWatch({ control, name: 'is_active' });
+  const proxyEnabled = useWatch({ control, name: 'proxy_enabled' });
+  const noSuffix = useWatch({ control, name: 'no_suffix' });
   const { configs: protocolConfigs } = useProviderProtocolConfigs();
   const protocolConfig = getProviderProtocolConfig(protocol, protocolConfigs);
   
@@ -209,9 +209,10 @@ export function ProviderForm({
       // In edit mode, treat base_url as user-edited if it differs from the protocol default
       const defaultUrl = getProviderProtocolConfig(provider.protocol, protocolConfigs)?.base_url;
       userHasEditedBaseUrl.current = !!defaultUrl && provider.base_url !== defaultUrl;
-      
+
       // Fill extra headers
       if (provider.extra_headers) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setExtraHeaders(
           Object.entries(provider.extra_headers).map(([key, value]) => ({
             key,
@@ -251,18 +252,15 @@ export function ProviderForm({
       });
       userHasEditedBaseUrl.current = false;
       setExtraHeaders([]);
-      setDefaultParameters(
-        protocol === 'anthropic'
-          ? [{ key: 'max_tokens', value: '4096' }]
-          : []
-      );
+      setDefaultParameters([]);
     }
-  }, [provider, reset]);
+  }, [protocolConfigs, provider, reset]);
 
   useEffect(() => {
     if (provider) return;
     if (defaultParameters.length > 0) return;
     if (protocol !== 'anthropic') return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDefaultParameters([{ key: 'max_tokens', value: '4096' }]);
   }, [provider, protocol, defaultParameters.length]);
 
@@ -310,6 +308,7 @@ export function ProviderForm({
       }
     });
 
+    const shouldIncludeHeaders = isEdit || Object.keys(headers).length > 0;
     const shouldIncludeOptions =
       data.no_suffix || !!provider?.provider_options?.no_suffix || Object.keys(params).length > 0;
 
@@ -320,7 +319,7 @@ export function ProviderForm({
       base_url: data.base_url,
       protocol: data.protocol,
       is_active: data.is_active,
-      extra_headers: Object.keys(headers).length > 0 ? headers : undefined,
+      extra_headers: shouldIncludeHeaders ? headers : undefined,
       provider_options: shouldIncludeOptions
         ? {
             default_parameters: Object.keys(params).length > 0 ? params : undefined,

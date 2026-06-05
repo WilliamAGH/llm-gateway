@@ -9,6 +9,7 @@ import { ProtocolType } from './provider';
 /** Selection Strategy Type */
 export type SelectionStrategy = 'round_robin' | 'cost_first' | 'priority';
 export type ModelType = 'chat' | 'speech' | 'transcription' | 'embedding' | 'images';
+export type ModelListSortBy = 'requested_model_asc' | 'requested_model_desc';
 
 /** Model Mapping Entity */
 export interface ModelMapping {
@@ -49,6 +50,21 @@ export interface ModelMappingProvider {
   provider_name: string;              // Obtained via join
   provider_protocol?: ProtocolType | null; // Obtained via join
   provider_is_active?: boolean | null; // Obtained via join
+  resolved_billing_mode?: 'token_flat' | 'token_tiered' | 'per_request' | 'per_image' | 'inherit_model_default' | null;
+  resolved_input_price?: number | null;
+  resolved_output_price?: number | null;
+  resolved_per_request_price?: number | null;
+  resolved_per_image_price?: number | null;
+  resolved_tiered_pricing?: Array<{
+    max_input_tokens?: number | null;
+    input_price: number;
+    output_price: number;
+    cached_input_price?: number | null;
+    cached_output_price?: number | null;
+  }> | null;
+  resolved_cache_billing_enabled?: boolean | null;
+  resolved_cached_input_price?: number | null;
+  resolved_cached_output_price?: number | null;
   target_model_name: string;          // Target model name for this provider
   provider_rules?: RuleSet | null;    // Provider level rules
   // Provider override pricing (USD per 1,000,000 tokens)
@@ -210,6 +226,7 @@ export interface ModelListParams {
   target_model_name?: string;
   model_type?: ModelType;
   strategy?: SelectionStrategy;
+  sort_by?: ModelListSortBy;
 }
 
 /** Model-Provider Mapping List Query Params */

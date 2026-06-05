@@ -9,6 +9,7 @@ export interface RequestLog {
   request_time: string;
   api_key_id?: number;
   api_key_name?: string;
+  user_id?: string;
   requested_model?: string;
   target_model?: string;
   provider_id?: number;
@@ -28,6 +29,7 @@ export interface RequestLog {
 
 /** Request Log Detail Entity (Includes full request/response) */
 export interface RequestLogDetail extends RequestLog {
+  detail_available?: boolean;
   request_headers?: Record<string, string>;  // Sanitized
   response_headers?: Record<string, string>; // Sanitized
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -41,12 +43,37 @@ export interface RequestLogDetail extends RequestLog {
   request_protocol?: string;
   supplier_protocol?: string;
   request_path?: string;
+  request_url?: string;
   request_method?: string;
   upstream_url?: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   converted_request_body?: Record<string, any>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   upstream_response_body?: any;
+}
+
+export interface RetryLogResponse {
+  response_status: number;
+  response_body?: unknown;
+  new_log_id?: number | null;
+  trace_id?: string | null;
+}
+
+export interface LogPlaygroundExecuteRequest {
+  protocol: string;
+  request_path?: string | null;
+  request_headers?: Record<string, string>;
+  request_body?: unknown;
+}
+
+export interface LogPlaygroundExecuteResponse {
+  response_status: number;
+  response_body?: unknown;
+  trace_id?: string | null;
+  provider_name?: string | null;
+  target_model?: string | null;
+  first_byte_delay_ms?: number | null;
+  total_time_ms?: number | null;
 }
 
 /** Log Query Params */
@@ -84,6 +111,7 @@ export interface LogQueryParams {
   // API Key filter
   api_key_id?: number;
   api_key_name?: string;
+  user_id?: string;
   
   // Retry count filter
   retry_count_min?: number;

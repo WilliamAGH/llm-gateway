@@ -6,7 +6,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, useWatch } from 'react-hook-form';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -46,6 +46,7 @@ const FILTER_KEYS: Array<keyof LogQueryParams> = [
   'status_max',
   'api_key_id',
   'api_key_name',
+  'user_id',
   'retry_count_min',
   'retry_count_max',
   'input_tokens_min',
@@ -112,6 +113,7 @@ export function LogFilters({
       status_max: filters.status_max,
       api_key_id: filters.api_key_id,
       api_key_name: filters.api_key_name,
+      user_id: filters.user_id,
       retry_count_min: filters.retry_count_min,
       retry_count_max: filters.retry_count_max,
       input_tokens_min: filters.input_tokens_min,
@@ -122,6 +124,7 @@ export function LogFilters({
     [
       filters.api_key_id,
       filters.api_key_name,
+      filters.user_id,
       filters.end_time,
       filters.has_error,
       filters.input_tokens_max,
@@ -139,7 +142,7 @@ export function LogFilters({
     ]
   );
 
-  const { register, handleSubmit, reset, setValue, watch } = useForm<
+  const { register, handleSubmit, reset, setValue, control } = useForm<
     Partial<LogQueryParams>
   >({
     defaultValues,
@@ -186,19 +189,24 @@ export function LogFilters({
     onFilterChange(normalized);
   };
 
+  const watchedProviderId = useWatch({ control, name: 'provider_id' });
+  const watchedRequestedModel = useWatch({ control, name: 'requested_model' });
+  const watchedApiKeyId = useWatch({ control, name: 'api_key_id' });
+  const watchedHasError = useWatch({ control, name: 'has_error' });
+
   const providerValue =
-    watch('provider_id') === undefined ? 'all' : String(watch('provider_id'));
+    watchedProviderId === undefined ? 'all' : String(watchedProviderId);
 
   const modelValue =
-    watch('requested_model') === undefined ? 'all' : String(watch('requested_model'));
+    watchedRequestedModel === undefined ? 'all' : String(watchedRequestedModel);
 
   const apiKeyValue =
-    watch('api_key_id') === undefined ? 'all' : String(watch('api_key_id'));
+    watchedApiKeyId === undefined ? 'all' : String(watchedApiKeyId);
 
   const errorValue =
-    watch('has_error') === undefined
+    watchedHasError === undefined
       ? 'all'
-      : watch('has_error')
+      : watchedHasError
         ? 'true'
         : 'false';
 
@@ -398,6 +406,14 @@ export function LogFilters({
                 <Input
                   placeholder={t('filters.fuzzyMatch')}
                   {...register('api_key_name')}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>{t('filters.userId')}</Label>
+                <Input
+                  placeholder={t('filters.fuzzyMatch')}
+                  {...register('user_id')}
                 />
               </div>
 

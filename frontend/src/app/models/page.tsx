@@ -28,6 +28,7 @@ import {
 import { exportModels, importModels } from '@/lib/api';
 import {
   ModelExport,
+  ModelListSortBy,
   ModelMapping,
   ModelMappingCreate,
   ModelMappingUpdate,
@@ -54,6 +55,13 @@ function ModelsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
+  const parseSortByParam = useCallback(
+    (value: string | null): ModelListSortBy | undefined => (
+      value === 'requested_model_asc' || value === 'requested_model_desc' ? value : undefined
+    ),
+    []
+  );
+
   const buildStateFromParams = useCallback(() => {
     const parsedPage = parseNumberParam(searchParams.get('page'), { min: 1 }) ?? 1;
     const parsedPageSize = parseNumberParam(searchParams.get('page_size'), { min: 1 }) ?? 20;
@@ -65,13 +73,17 @@ function ModelsContent() {
         (parseStringParam(searchParams.get('strategy')) as SelectionStrategy | 'all') ?? 'all',
       is_active: parseStringParam(searchParams.get('is_active')) ?? 'all',
     };
+    const parsedSortBy = parseSortByParam(searchParams.get('sort_by'));
 
-    return { parsedPage, parsedPageSize, parsedFilters };
-  }, [searchParams]);
+    return { parsedPage, parsedPageSize, parsedFilters, parsedSortBy };
+  }, [parseSortByParam, searchParams]);
 
   // Pagination state
   const [page, setPage] = useState(() => buildStateFromParams().parsedPage);
   const [pageSize, setPageSize] = useState(() => buildStateFromParams().parsedPageSize);
+  const [sortBy, setSortBy] = useState<ModelListSortBy | undefined>(
+    () => buildStateFromParams().parsedSortBy
+  );
 
   // Form dialog state
   const [formOpen, setFormOpen] = useState(false);
@@ -97,10 +109,11 @@ function ModelsContent() {
   ), []);
 
   useEffect(() => {
-    const { parsedPage, parsedPageSize, parsedFilters } = buildStateFromParams();
+    const { parsedPage, parsedPageSize, parsedFilters, parsedSortBy } = buildStateFromParams();
     setPage((prev) => (prev === parsedPage ? prev : parsedPage));
     setPageSize((prev) => (prev === parsedPageSize ? prev : parsedPageSize));
     setFilters((prev) => (areFiltersEqual(prev, parsedFilters) ? prev : parsedFilters));
+    setSortBy((prev) => (prev === parsedSortBy ? prev : parsedSortBy));
   }, [areFiltersEqual, buildStateFromParams]);
 
   const queryString = useMemo(() => {
@@ -118,8 +131,11 @@ function ModelsContent() {
     if (filters.is_active && filters.is_active !== 'all') {
       setParam(params, 'is_active', filters.is_active);
     }
+    if (sortBy) {
+      setParam(params, 'sort_by', sortBy);
+    }
     return params.toString();
-  }, [filters, page, pageSize]);
+  }, [filters, page, pageSize, sortBy]);
 
   const returnTo = useMemo(
     () => (queryString ? `/models?${queryString}` : '/models'),
@@ -142,6 +158,7 @@ function ModelsContent() {
     model_type: filters.model_type === 'all' ? undefined : (filters.model_type as ModelType),
     strategy: filters.strategy === 'all' ? undefined : (filters.strategy as SelectionStrategy),
     is_active: filters.is_active === 'all' ? undefined : filters.is_active === 'active',
+    sort_by: sortBy,
   });
   const { data: statsData } = useModelStats();
 
@@ -152,6 +169,15 @@ function ModelsContent() {
 
   // File Input Ref
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleRequestedModelSortChange = useCallback(() => {
+    setSortBy((current) => {
+      if (current === undefined) return 'requested_model_asc';
+      if (current === 'requested_model_asc') return 'requested_model_desc';
+      return undefined;
+    });
+    setPage(1);
+  }, []);
 
   // Open create form
   const handleCreate = () => {
@@ -345,6 +371,8 @@ function ModelsContent() {
                 statsByModel={Object.fromEntries(
                   (statsData ?? []).map((stat) => [stat.requested_model, stat])
                 )}
+                requestedModelSort={sortBy}
+                onRequestedModelSortChange={handleRequestedModelSortChange}
                 onEdit={handleEdit}
                 onDelete={handleDelete}
                 onTest={handleTest}

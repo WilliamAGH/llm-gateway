@@ -24,6 +24,7 @@ from app.common.proxy import build_proxy_config
 from app.common.sanitizer import sanitize_headers
 from app.common.stream_usage import StreamUsageAccumulator
 from app.common.time import utc_now
+from app.common.upstream_url import build_upstream_url
 from app.common.token_counter import get_token_counter
 from app.common.usage_extractor import extract_usage_details
 from app.common.utils import generate_trace_id
@@ -47,6 +48,7 @@ from app.services.strategy import (
 logger = logging.getLogger(__name__)
 
 MAX_LOG_TEXT_LENGTH = 10000
+MAX_USER_ID_LENGTH = 255
 CandidateKey = tuple[str, int] | tuple[str, int, str]
 
 
@@ -78,6 +80,16 @@ def _smart_truncate(data: Any, max_list: int = 20, max_str: int = 1000) -> Any:
         return data[:max_str] + "...[truncated]"
 
     return data
+
+
+def _extract_user_id(headers: dict[str, str]) -> str | None:
+    for key, value in headers.items():
+        if key.lower() == "x-user-id":
+            user_id = str(value).strip()
+            if not user_id:
+                return None
+            return user_id[:MAX_USER_ID_LENGTH]
+    return None
 
 
 class ProxyService:
@@ -346,6 +358,7 @@ class ProxyService:
         api_key_name: Optional[str],
         request_protocol: str,
         path: str,
+        request_url: Optional[str],
         method: str,
         headers: dict[str, str],
         body: dict[str, Any],
@@ -373,6 +386,7 @@ class ProxyService:
         trace_id = generate_trace_id()
         request_time = utc_now()
         sanitized_body = self._sanitize_request_body_for_log(body)
+        user_id = _extract_user_id(headers)
 
         # 1. Extract requested_model
         requested_model = body.get("model")
@@ -480,6 +494,7 @@ class ProxyService:
                 request_time=attempt.request_time,
                 api_key_id=api_key_id,
                 api_key_name=api_key_name,
+                user_id=user_id,
                 requested_model=requested_model,
                 target_model=attempt.provider.target_model,
                 provider_id=attempt.provider.provider_id,
@@ -503,6 +518,7 @@ class ProxyService:
                 trace_id=trace_id,
                 is_stream=False,
                 request_path=path,
+                request_url=request_url,
                 request_method=method,
                 upstream_url=conversion_data.get("upstream_url"),
                 # Protocol conversion fields
@@ -558,7 +574,7 @@ class ProxyService:
                         hooked_body = hooked_image_body
                 supplier_path, supplier_body = convert_request_for_supplier(
                     request_protocol=request_protocol,
-                    supplier_protocol=supplier_protocol,
+                    supplier_protocol=candidate.protocol,
                     path=path,
                     body=hooked_body,
                     target_model=candidate.target_model,
@@ -587,7 +603,9 @@ class ProxyService:
                 # Track conversion data for logging
                 conversion_data["supplier_protocol"] = supplier_protocol
                 conversion_data["converted_request_body"] = supplier_body
-                conversion_data["upstream_url"] = f"{candidate.base_url.rstrip('/')}{supplier_path}"
+                conversion_data["upstream_url"] = build_upstream_url(
+                    candidate.base_url, supplier_path
+                )
                 same_protocol = normalize_protocol(
                     request_protocol
                 ) == normalize_protocol(supplier_protocol)
@@ -814,6 +832,7 @@ class ProxyService:
             request_time=request_time,
             api_key_id=api_key_id,
             api_key_name=api_key_name,
+            user_id=user_id,
             requested_model=requested_model,
             target_model=result.final_provider.target_model
             if result.final_provider
@@ -846,6 +865,7 @@ class ProxyService:
             trace_id=trace_id,
             is_stream=False,
             request_path=path,
+            request_url=request_url,
             request_method=method,
             upstream_url=conversion_data.get("upstream_url"),
             # Protocol conversion fields
@@ -886,6 +906,7 @@ class ProxyService:
         api_key_name: Optional[str],
         request_protocol: str,
         path: str,
+        request_url: Optional[str],
         method: str,
         headers: dict[str, str],
         body: dict[str, Any],
@@ -908,6 +929,7 @@ class ProxyService:
         request_time = utc_now()
         start_monotonic = time.monotonic()
         sanitized_body = self._sanitize_request_body_for_log(body)
+        user_id = _extract_user_id(headers)
 
         # 1-7. Same model resolution and rule matching logic
         requested_model = body.get("model")
@@ -994,7 +1016,7 @@ class ProxyService:
                         hooked_body = hooked_image_body
                 supplier_path, supplier_body = convert_request_for_supplier(
                     request_protocol=request_protocol,
-                    supplier_protocol=supplier_protocol,
+                    supplier_protocol=candidate.protocol,
                     path=path,
                     body=hooked_body,
                     target_model=candidate.target_model,
@@ -1021,7 +1043,9 @@ class ProxyService:
                 # Track conversion data for logging
                 stream_conversion_data["supplier_protocol"] = supplier_protocol
                 stream_conversion_data["converted_request_body"] = supplier_body
-                stream_conversion_data["upstream_url"] = f"{candidate.base_url.rstrip('/')}{supplier_path}"
+                stream_conversion_data["upstream_url"] = build_upstream_url(
+                    candidate.base_url, supplier_path
+                )
             except Exception as e:
                 error_msg = str(e)
                 logger.error(
@@ -1231,6 +1255,7 @@ class ProxyService:
                 request_time=attempt.request_time,
                 api_key_id=api_key_id,
                 api_key_name=api_key_name,
+                user_id=user_id,
                 requested_model=requested_model,
                 target_model=attempt.provider.target_model,
                 provider_id=attempt.provider.provider_id,
@@ -1254,6 +1279,7 @@ class ProxyService:
                 trace_id=trace_id,
                 is_stream=True,
                 request_path=path,
+                request_url=request_url,
                 request_method=method,
                 upstream_url=stream_conversion_data.get("upstream_url"),
                 # Protocol conversion fields
@@ -1437,6 +1463,7 @@ class ProxyService:
                     request_time=request_time,
                     api_key_id=api_key_id,
                     api_key_name=api_key_name,
+                    user_id=user_id,
                     requested_model=requested_model,
                     target_model=final_provider.target_model
                     if final_provider
@@ -1469,6 +1496,7 @@ class ProxyService:
                     trace_id=trace_id,
                     is_stream=True,
                     request_path=path,
+                    request_url=request_url,
                     request_method=method,
                     upstream_url=stream_conversion_data.get("upstream_url"),
                     # Protocol conversion fields

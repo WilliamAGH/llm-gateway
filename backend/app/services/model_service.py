@@ -22,7 +22,11 @@ from app.domain.model import (
 )
 from app.repositories.model_repo import ModelRepository
 from app.repositories.provider_repo import ProviderRepository
-from app.common.costs import calculate_cost_from_billing, resolve_billing
+from app.common.costs import (
+    BILLING_MODE_TOKEN_FLAT,
+    calculate_cost_from_billing,
+    resolve_billing,
+)
 from app.rules.context import RuleContext, TokenUsage
 from app.rules.engine import RuleEngine
 from app.services.retry_handler import RetryHandler
@@ -242,6 +246,7 @@ class ModelService:
         target_model_name: Optional[str] = None,
         model_type: Optional[str] = None,
         strategy: Optional[str] = None,
+        sort_by: Optional[str] = None,
     ) -> tuple[list[ModelMappingResponse], int]:
         """
         Get Model Mapping List
@@ -265,7 +270,8 @@ class ModelService:
             requested_model=requested_model,
             target_model_name=target_model_name,
             model_type=model_type,
-            strategy=strategy
+            strategy=strategy,
+            sort_by=sort_by,
         )
         
         responses = []
@@ -430,11 +436,54 @@ class ModelService:
             if existing is None or item.updated_at > existing.updated_at:
                 latest_by_group[group_key] = item
 
+        resolved_items: list[ModelMappingProviderResponse] = []
+        for item in latest_by_group.values():
+            resolved_items.append(await self._apply_resolved_billing_config(item))
+
         return sorted(
-            latest_by_group.values(),
+            resolved_items,
             key=lambda item: item.updated_at,
             reverse=True,
         )
+
+    async def _apply_resolved_billing_config(
+        self, item: ModelMappingProviderResponse
+    ) -> ModelMappingProviderResponse:
+        model = await self.model_repo.get_mapping(item.requested_model)
+        provider_mode = item.billing_mode or BILLING_MODE_TOKEN_FLAT
+
+        if provider_mode == "inherit_model_default":
+            item.resolved_billing_mode = (
+                model.billing_mode
+                if model and model.billing_mode is not None
+                else BILLING_MODE_TOKEN_FLAT
+            )
+            item.resolved_input_price = model.input_price if model else None
+            item.resolved_output_price = model.output_price if model else None
+            item.resolved_per_request_price = model.per_request_price if model else None
+            item.resolved_per_image_price = model.per_image_price if model else None
+            item.resolved_tiered_pricing = model.tiered_pricing if model else None
+            item.resolved_cache_billing_enabled = (
+                model.cache_billing_enabled if model else None
+            )
+            item.resolved_cached_input_price = (
+                model.cached_input_price if model else None
+            )
+            item.resolved_cached_output_price = (
+                model.cached_output_price if model else None
+            )
+            return item
+
+        item.resolved_billing_mode = provider_mode
+        item.resolved_input_price = item.input_price
+        item.resolved_output_price = item.output_price
+        item.resolved_per_request_price = item.per_request_price
+        item.resolved_per_image_price = item.per_image_price
+        item.resolved_tiered_pricing = item.tiered_pricing
+        item.resolved_cache_billing_enabled = item.cache_billing_enabled
+        item.resolved_cached_input_price = item.cached_input_price
+        item.resolved_cached_output_price = item.cached_output_price
+        return item
     
     async def update_provider_mapping(
         self, id: int, data: ModelMappingProviderUpdate

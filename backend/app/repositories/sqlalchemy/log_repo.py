@@ -37,6 +37,7 @@ _SUMMARY_COLUMNS = [
     RequestLogORM.request_time,
     RequestLogORM.api_key_id,
     RequestLogORM.api_key_name,
+    RequestLogORM.user_id,
     RequestLogORM.requested_model,
     RequestLogORM.target_model,
     RequestLogORM.provider_id,
@@ -81,11 +82,25 @@ class SQLAlchemyLogRepository(LogRepository):
         """Convert ORM entity to domain model (with detail data from relationship or fallback)"""
         request_time = ensure_utc(entity.request_time)
         detail = entity.detail
+        detail_available = detail is not None or any(
+            value is not None
+            for value in (
+                entity.request_headers,
+                entity.response_headers,
+                entity.request_body,
+                entity.response_body,
+                entity.usage_details,
+                entity.error_info,
+                entity.converted_request_body,
+                entity.upstream_response_body,
+            )
+        )
         return RequestLogModel(
             id=entity.id,
             request_time=request_time,
             api_key_id=entity.api_key_id,
             api_key_name=entity.api_key_name,
+            user_id=entity.user_id,
             requested_model=entity.requested_model,
             target_model=entity.target_model,
             provider_id=entity.provider_id,
@@ -121,8 +136,10 @@ class SQLAlchemyLogRepository(LogRepository):
             converted_request_body=detail.converted_request_body if detail else entity.converted_request_body,
             upstream_response_body=detail.upstream_response_body if detail else entity.upstream_response_body,
             request_path=entity.request_path,
+            request_url=entity.request_url,
             request_method=entity.request_method,
             upstream_url=entity.upstream_url,
+            detail_available=detail_available,
         )
 
     def _row_to_summary(self, row) -> RequestLogSummary:
@@ -132,6 +149,7 @@ class SQLAlchemyLogRepository(LogRepository):
             request_time=ensure_utc(row["request_time"]),
             api_key_id=row["api_key_id"],
             api_key_name=row["api_key_name"],
+            user_id=row["user_id"],
             requested_model=row["requested_model"],
             target_model=row["target_model"],
             provider_id=row["provider_id"],
@@ -157,6 +175,7 @@ class SQLAlchemyLogRepository(LogRepository):
             request_time=to_utc_naive(data.request_time),
             api_key_id=data.api_key_id,
             api_key_name=data.api_key_name,
+            user_id=data.user_id,
             requested_model=data.requested_model,
             target_model=data.target_model,
             provider_id=data.provider_id,
@@ -177,6 +196,7 @@ class SQLAlchemyLogRepository(LogRepository):
             request_protocol=data.request_protocol,
             supplier_protocol=data.supplier_protocol,
             request_path=data.request_path,
+            request_url=data.request_url,
             request_method=data.request_method,
             upstream_url=data.upstream_url,
             # Large fields NULL on main table (stored in detail table)
@@ -216,6 +236,7 @@ class SQLAlchemyLogRepository(LogRepository):
             request_time=request_time,
             api_key_id=entity.api_key_id,
             api_key_name=entity.api_key_name,
+            user_id=entity.user_id,
             requested_model=entity.requested_model,
             target_model=entity.target_model,
             provider_id=entity.provider_id,
@@ -244,9 +265,31 @@ class SQLAlchemyLogRepository(LogRepository):
             converted_request_body=data.converted_request_body,
             upstream_response_body=data.upstream_response_body,
             request_path=entity.request_path,
+            request_url=entity.request_url,
             request_method=entity.request_method,
             upstream_url=entity.upstream_url,
+            detail_available=True,
         )
+
+    async def cleanup_old_log_details(self, days_to_keep: int) -> int:
+        """
+        Delete detail rows older than specified days while keeping summary logs.
+
+        Args:
+            days_to_keep: Number of days to keep detail rows
+
+        Returns:
+            int: Number of deleted detail rows
+        """
+        cutoff_time = to_utc_naive(utc_now() - timedelta(days=days_to_keep))
+        if cutoff_time is None:
+            return 0
+
+        subquery = select(RequestLogORM.id).where(RequestLogORM.request_time < cutoff_time)
+        stmt = delete(RequestLogDetailORM).where(RequestLogDetailORM.log_id.in_(subquery))
+        result = await self.session.execute(stmt)
+        await self.session.commit()
+        return result.rowcount or 0
 
     async def get_by_id(self, id: int) -> Optional[RequestLogModel]:
         """Get log by ID with full detail"""
@@ -254,6 +297,40 @@ class SQLAlchemyLogRepository(LogRepository):
             select(RequestLogORM)
             .options(joinedload(RequestLogORM.detail))
             .where(RequestLogORM.id == id)
+        )
+        entity = result.unique().scalar_one_or_none()
+        return self._to_domain(entity) if entity else None
+
+    async def get_by_trace_id(self, trace_id: str) -> Optional[RequestLogModel]:
+        """Get the latest log by trace ID with full detail."""
+        result = await self.session.execute(
+            select(RequestLogORM)
+            .options(joinedload(RequestLogORM.detail))
+            .where(RequestLogORM.trace_id == trace_id)
+            .order_by(RequestLogORM.id.desc())
+            .limit(1)
+        )
+        entity = result.unique().scalars().first()
+        return self._to_domain(entity) if entity else None
+
+    async def find_latest_retry_candidate(
+        self,
+        *,
+        min_id: int,
+        api_key_id: int,
+        request_path: str,
+    ) -> Optional[RequestLogModel]:
+        """Find the latest log created by a retried request."""
+        result = await self.session.execute(
+            select(RequestLogORM)
+            .options(joinedload(RequestLogORM.detail))
+            .where(
+                RequestLogORM.id > min_id,
+                RequestLogORM.api_key_id == api_key_id,
+                RequestLogORM.request_path == request_path,
+            )
+            .order_by(RequestLogORM.id.desc())
+            .limit(1)
         )
         entity = result.unique().scalar_one_or_none()
         return self._to_domain(entity) if entity else None
@@ -338,6 +415,8 @@ class SQLAlchemyLogRepository(LogRepository):
             conditions.append(
                 RequestLogORM.api_key_name.ilike(f"%{query.api_key_name}%")
             )
+        if query.user_id:
+            conditions.append(RequestLogORM.user_id.ilike(f"%{query.user_id}%"))
 
         # Retry count filter
         if query.retry_count_min is not None:
@@ -442,6 +521,8 @@ class SQLAlchemyLogRepository(LogRepository):
             conditions.append(
                 RequestLogORM.api_key_name.ilike(f"%{query.api_key_name}%")
             )
+        if query.user_id:
+            conditions.append(RequestLogORM.user_id.ilike(f"%{query.user_id}%"))
         if query.requested_model:
             conditions.append(
                 RequestLogORM.requested_model.ilike(f"%{query.requested_model}%")

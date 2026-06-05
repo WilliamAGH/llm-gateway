@@ -9,6 +9,7 @@ import React, { Suspense, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useTranslations } from 'next-intl';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -26,7 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { ArrowLeft, Plus, Pencil, Trash2 } from 'lucide-react';
+import { ArrowLeft, ChevronsUp, Loader2, Plus, Pencil, Trash2 } from 'lucide-react';
 import {
   BillingDisplay,
   ModelProviderForm,
@@ -34,11 +35,12 @@ import {
   ModelTestDialog,
 } from '@/components/models';
 import { ConfirmDialog, LoadingSpinner, ErrorState } from '@/components/common';
+import { updateModelProvider as updateModelProviderApi } from '@/lib/api';
 import {
   useModel,
   useModelStats,
   useModelProviderStats,
-  useProviders,
+  useProviderNames,
   useCreateModelProvider,
   useUpdateModelProvider,
   useDeleteModelProvider,
@@ -60,22 +62,6 @@ function protocolLabel(
   configs: ReturnType<typeof useProviderProtocolConfigs>['configs']
 ) {
   return getProviderProtocolLabel(protocol, configs);
-}
-
-function roundUpTo4Decimals(value: number) {
-  const factor = 10000;
-  return Math.round((value + Number.EPSILON) * factor) / factor;
-}
-
-function formatUsdCeil4(value: number | null | undefined) {
-  if (value === null || value === undefined) return '-';
-  const num = Number(value);
-  if (Number.isNaN(num)) return '-';
-  return `$${roundUpTo4Decimals(num).toFixed(4)}`;
-}
-
-function formatPrice(value: number | null | undefined) {
-  return formatUsdCeil4(value);
 }
 
 function formatRate(value: number | null | undefined) {
@@ -110,16 +96,17 @@ function ModelDetailContent() {
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deletingMapping, setDeletingMapping] = useState<ModelMappingProvider | null>(null);
+  const [prioritizingMappingId, setPrioritizingMappingId] = useState<number | null>(null);
 
   const { data: model, isLoading, isError, refetch } = useModel(requestedModel);
   const { data: modelStatsData } = useModelStats({ requested_model: requestedModel });
   const { data: providerStatsData } = useModelProviderStats({ requested_model: requestedModel });
-  const { data: providersData } = useProviders();
+  const { data: providerNames = [] } = useProviderNames();
   const { configs: protocolConfigs } = useProviderProtocolConfigs();
   const providersById = useMemo(() => {
-    const entries = providersData?.items?.map((p) => [p.id, p] as const) ?? [];
+    const entries = providerNames.map((p) => [p.id, p] as const);
     return new Map(entries);
-  }, [providersData?.items]);
+  }, [providerNames]);
 
   const createMutation = useCreateModelProvider();
   const updateMutation = useUpdateModelProvider();
@@ -138,6 +125,48 @@ function ModelDetailContent() {
   const handleDeleteMapping = (mapping: ModelMappingProvider) => {
     setDeletingMapping(mapping);
     setDeleteDialogOpen(true);
+  };
+
+  const handlePrioritizeMapping = async (mapping: ModelMappingProvider) => {
+    if (!model || !model.providers || model.providers.length === 0 || model.strategy !== 'priority') {
+      return;
+    }
+
+    const reorderedMappings = [
+      mapping,
+      ...model.providers.filter((item) => item.id !== mapping.id),
+    ];
+
+    const priorityUpdates = reorderedMappings
+      .map((item, index) => ({
+        id: item.id,
+        priority: (index + 1) * 100,
+      }))
+      .filter((item) => {
+        const current = model.providers?.find((provider) => provider.id === item.id);
+        return current?.priority !== item.priority;
+      });
+
+    if (priorityUpdates.length === 0) {
+      return;
+    }
+
+    setPrioritizingMappingId(mapping.id);
+    try {
+      await Promise.all(
+        priorityUpdates.map((item) =>
+          updateModelProviderApi(item.id, {
+            priority: item.priority,
+          })
+        )
+      );
+      await refetch();
+      toast.success(t('detail.priorityPromoted'));
+    } catch {
+      toast.error(t('detail.priorityPromoteFailed'));
+    } finally {
+      setPrioritizingMappingId(null);
+    }
   };
 
   const handleSubmit = async (
@@ -227,6 +256,7 @@ function ModelDetailContent() {
   const supportsBilling = modelType === 'chat' || modelType === 'embedding' || modelType === 'images';
   const modelStats = modelStatsData?.find((stat) => stat.requested_model === requestedModel);
   const providerStats = providerStatsData ?? [];
+  const isPriorityStrategy = model.strategy === 'priority';
 
   return (
     <div className="space-y-6">
@@ -469,6 +499,34 @@ function ModelDetailContent() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
+                          {isPriorityStrategy ? (
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => handlePrioritizeMapping(mapping)}
+                                    disabled={prioritizingMappingId !== null}
+                                  >
+                                    {prioritizingMappingId === mapping.id ? (
+                                      <Loader2
+                                        className="h-4 w-4 animate-spin"
+                                        suppressHydrationWarning
+                                      />
+                                    ) : (
+                                      <ChevronsUp className="h-4 w-4" suppressHydrationWarning />
+                                    )}
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  {prioritizingMappingId === mapping.id
+                                    ? tCommon('saving')
+                                    : t('actions.prioritize')}
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          ) : null}
                           <Button
                             variant="ghost"
                             size="icon"
@@ -555,7 +613,7 @@ function ModelDetailContent() {
         open={formOpen}
         onOpenChange={setFormOpen}
         requestedModel={requestedModel}
-        providers={providersData?.items || []}
+        providers={providerNames}
         defaultPrices={{ input_price: model.input_price ?? null, output_price: model.output_price ?? null }}
         mapping={editingMapping}
         modelType={modelType}

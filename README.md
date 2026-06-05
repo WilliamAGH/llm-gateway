@@ -68,6 +68,8 @@
 
 ### Comprehensive Observability
 
+- **Split Log Storage**: Summary fields stay in `request_logs`, while large request/response payloads are stored separately in `request_log_details` to reduce storage pressure and improve list-query performance
+- **Independent Detail Retention**: Request/response detail payloads can expire earlier than summary logs, so you can keep analytics longer without retaining heavy bodies forever
 - **Full Request/Response Capture**: Complete logging of request and response bodies (including streaming) to help debug issues and optimize AI system performance
 - **Token Tracking**: Automatic token counting using [tiktoken](https://github.com/openai/tiktoken)
 - **Latency Metrics**: First-byte delay and total response time
@@ -253,14 +255,35 @@ See [docs/api.md](docs/api.md) for complete API documentation.
 | `HTTP_TIMEOUT` | 1800 | Upstream request timeout (seconds) |
 | `API_KEY_PREFIX` | lgw- | Prefix for generated API keys |
 | `API_KEY_LENGTH` | 32 | Length of generated API keys |
+| `ENCRYPTION_KEY` | - | Base64-encoded 32-byte key used to encrypt stored sensitive fields (must stay stable across restarts) |
+| `ENABLE_VIEW_API_KEYS` | false | Whether full API keys can be viewed/copied again on the API Keys page |
+| `RATE_LIMIT_ENABLED` | false | Enable/disable built-in rate limiting middleware |
 | `ADMIN_USERNAME` | - | Admin login username (optional) |
 | `ADMIN_PASSWORD` | - | Admin login password (optional) |
 | `ADMIN_TOKEN_TTL_SECONDS` | 86400 | Admin session TTL (24 hours) |
 | `LOG_RETENTION_DAYS` | 7 | Log retention period |
-| `LOG_CLEANUP_HOUR` | 4 | Log cleanup time (UTC hour) |
+| `LOG_DETAIL_RETENTION_DAYS` | 7 | Retention period for heavy request/response detail payloads; must be less than or equal to `LOG_RETENTION_DAYS` |
+| `LOG_CLEANUP_INTERVAL_HOURS` | 24 | How often scheduled log cleanup runs |
 | `LLM_GATEWAY_PORT` | 8000 | Host port for Docker Compose |
 | `KV_STORE_TYPE` | database | KV store backend: `database` or `redis` |
 | `REDIS_URL` | - | Redis connection URL (when using Redis KV store) |
+
+### Log Retention Behavior
+
+- `LOG_RETENTION_DAYS` controls how long summary log rows are kept.
+- `LOG_DETAIL_RETENTION_DAYS` controls how long large request/response detail rows are kept.
+- Once detail rows expire, the log entry still appears in the admin log list and stats, but request bodies, headers, upstream payloads, and retry/playground debug data are no longer available for that log.
+- Scheduled cleanup runs every `LOG_CLEANUP_INTERVAL_HOURS`.
+
+Generate an encryption key:
+```bash
+python -c "import secrets, base64; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"
+```
+
+Set it in your `.env` (required for production):
+```env
+ENCRYPTION_KEY=your-generated-key
+```
 
 ### Database Configuration
 

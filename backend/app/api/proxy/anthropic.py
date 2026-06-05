@@ -12,8 +12,20 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from app.api.deps import CurrentApiKey, ProxyServiceDep
 from app.common.errors import AppError
 from app.common.proxy_headers import sanitize_upstream_response_headers
+from app.common.token_counter import AnthropicTokenCounter
 
 router = APIRouter(tags=["Proxy - Anthropic"])
+token_counter = AnthropicTokenCounter()
+
+
+def _with_trace_id_header(
+    headers: dict[str, str],
+    trace_id: str | None,
+) -> dict[str, str]:
+    merged = dict(headers)
+    if trace_id:
+        merged["x-lgw-trace-id"] = trace_id
+    return merged
 
 
 @router.post("/v1/messages")
@@ -42,6 +54,7 @@ async def create_message(
                 api_key_name=api_key.key_name,
                 request_protocol="anthropic",
                 path="/v1/messages",
+                request_url=str(request.url),
                 method="POST",
                 headers=headers,
                 body=body,
@@ -54,18 +67,27 @@ async def create_message(
                     return JSONResponse(
                         content=content,
                         status_code=initial_response.status_code,
-                        headers=sanitize_upstream_response_headers(initial_response.headers),
+                        headers=_with_trace_id_header(
+                            sanitize_upstream_response_headers(initial_response.headers),
+                            log_info.get("trace_id") if log_info else None,
+                        ),
                     )
                 return Response(
                     content=content,
                     status_code=initial_response.status_code,
-                    headers=sanitize_upstream_response_headers(initial_response.headers),
+                    headers=_with_trace_id_header(
+                        sanitize_upstream_response_headers(initial_response.headers),
+                        log_info.get("trace_id") if log_info else None,
+                    ),
                 )
             
             return StreamingResponse(
                 stream_gen,
                 status_code=initial_response.status_code,
-                headers=sanitize_upstream_response_headers(initial_response.headers),
+                headers=_with_trace_id_header(
+                    sanitize_upstream_response_headers(initial_response.headers),
+                    log_info.get("trace_id") if log_info else None,
+                ),
                 media_type="text/event-stream",
             )
         else:
@@ -74,6 +96,7 @@ async def create_message(
                 api_key_name=api_key.key_name,
                 request_protocol="anthropic",
                 path="/v1/messages",
+                request_url=str(request.url),
                 method="POST",
                 headers=headers,
                 body=body,
@@ -84,12 +107,18 @@ async def create_message(
                 return JSONResponse(
                     content=content,
                     status_code=response.status_code,
-                    headers=sanitize_upstream_response_headers(response.headers),
+                    headers=_with_trace_id_header(
+                        sanitize_upstream_response_headers(response.headers),
+                        log_info.get("trace_id") if log_info else None,
+                    ),
                 )
             return Response(
                 content=content,
                 status_code=response.status_code,
-                headers=sanitize_upstream_response_headers(response.headers),
+                headers=_with_trace_id_header(
+                    sanitize_upstream_response_headers(response.headers),
+                    log_info.get("trace_id") if log_info else None,
+                ),
             )
             
     except AppError as e:
@@ -104,6 +133,43 @@ async def create_message(
                     "message": "Internal server error",
                     "type": "internal_error",
                     "code": "internal_error"
+                }
+            },
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@router.post("/v1/messages/count_tokens")
+async def count_message_tokens(
+    request: Request,
+    api_key: CurrentApiKey,
+    x_api_key: str = Header(None, description="Anthropic API Key", alias="x-api-key"),
+    anthropic_version: str = Header(None, description="Anthropic Version"),
+):
+    """
+    Anthropic Count Tokens API
+
+    Count input tokens locally without forwarding the request upstream.
+    """
+    try:
+        body = await request.json()
+        model = body.get("model", "") if isinstance(body, dict) else ""
+        input_tokens = token_counter.count_request(body, model)
+        return JSONResponse(content={"input_tokens": input_tokens})
+    except AppError as e:
+        return JSONResponse(content=e.to_dict(), status_code=e.status_code)
+    except Exception as e:
+        import logging
+
+        logging.getLogger(__name__).error(
+            f"Unexpected error in count_tokens: {str(e)}", exc_info=True
+        )
+        return JSONResponse(
+            content={
+                "error": {
+                    "message": "Internal server error",
+                    "type": "internal_error",
+                    "code": "internal_error",
                 }
             },
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

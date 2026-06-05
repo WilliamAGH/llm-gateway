@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from app.common.protocol import sanitize_gemini_request_body
 from app.common.protocol_conversion import (
     convert_request_for_supplier,
     convert_response_for_user,
@@ -120,6 +121,264 @@ def test_convert_request_openai_to_openai_responses_chat():
         assert isinstance(input_val, str)
         assert input_val == "Hi"
     assert out_body["max_output_tokens"] == 12
+
+
+def test_convert_request_openai_to_anthropic_maps_reasoning_effort():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="openai",
+        supplier_protocol="anthropic",
+        path="/v1/chat/completions",
+        body={
+            "model": "any",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "reasoning": {"effort": "xhigh"},
+            "max_tokens": 16,
+        },
+        target_model="claude-3-5-sonnet",
+    )
+
+    assert path == "/v1/messages"
+    assert "reasoning" not in out_body
+    assert out_body["thinking"] == {"type": "enabled"}
+    assert out_body["output_config"] == {"effort": "max"}
+
+
+def test_convert_request_openai_to_anthropic_maps_reasoning_none_to_disabled():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="openai",
+        supplier_protocol="anthropic",
+        path="/v1/chat/completions",
+        body={
+            "model": "any",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "reasoning": {"effort": "none"},
+            "max_tokens": 16,
+        },
+        target_model="claude-3-5-sonnet",
+    )
+
+    assert path == "/v1/messages"
+    assert "reasoning" not in out_body
+    assert out_body["thinking"] == {"type": "disabled"}
+    assert "output_config" not in out_body
+
+
+def test_convert_request_openai_to_deepseek_maps_reasoning_none_to_thinking_disabled():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="openai",
+        supplier_protocol="deepseek",
+        path="/v1/chat/completions",
+        body={
+            "model": "any",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "reasoning": {"effort": "none"},
+        },
+        target_model="deepseek-chat",
+    )
+
+    assert path == "/v1/chat/completions"
+    assert out_body["model"] == "deepseek-chat"
+    assert "reasoning" not in out_body
+    assert out_body["thinking"] == {"type": "disabled"}
+
+
+def test_convert_request_openai_to_deepseek_maps_reasoning_effort_to_thinking_enabled():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="openai",
+        supplier_protocol="deepseek",
+        path="/v1/chat/completions",
+        body={
+            "model": "any",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "reasoning": {"effort": "high"},
+        },
+        target_model="deepseek-reasoner",
+    )
+
+    assert path == "/v1/chat/completions"
+    assert "reasoning" not in out_body
+    assert out_body["thinking"] == {"type": "enabled"}
+    assert "output_config" not in out_body
+
+
+def test_convert_request_openai_to_deepseek_preserves_explicit_thinking_type():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="openai",
+        supplier_protocol="deepseek",
+        path="/v1/chat/completions",
+        body={
+            "model": "any",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "reasoning": {"effort": "high"},
+            "thinking": {"type": "disabled"},
+        },
+        target_model="deepseek-chat",
+    )
+
+    assert path == "/v1/chat/completions"
+    assert "reasoning" not in out_body
+    assert out_body["thinking"] == {"type": "disabled"}
+
+
+def test_convert_request_openai_to_moonshot_uses_deepseek_thinking_handling():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="openai",
+        supplier_protocol="moonshot",
+        path="/v1/chat/completions",
+        body={
+            "model": "any",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "reasoning": {"effort": "high"},
+        },
+        target_model="kimi-k2",
+    )
+
+    assert path == "/v1/chat/completions"
+    assert out_body["model"] == "kimi-k2"
+    assert "reasoning" not in out_body
+    assert "output_config" not in out_body
+    assert out_body["thinking"] == {"type": "enabled"}
+
+
+def test_convert_request_openai_to_zhipu_uses_deepseek_thinking_handling():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="openai",
+        supplier_protocol="zhipu",
+        path="/v1/chat/completions",
+        body={
+            "model": "any",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "reasoning": {"effort": "high"},
+        },
+        target_model="glm-4.5",
+    )
+
+    assert path == "/v1/chat/completions"
+    assert out_body["model"] == "glm-4.5"
+    assert "reasoning" not in out_body
+    assert "output_config" not in out_body
+    assert out_body["thinking"] == {"type": "enabled"}
+
+
+def test_convert_request_openai_to_aliyun_maps_reasoning_effort_to_enable_thinking():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="openai",
+        supplier_protocol="aliyun",
+        path="/v1/chat/completions",
+        body={
+            "model": "any",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "reasoning": {"effort": "high"},
+        },
+        target_model="qwen3-max",
+    )
+
+    assert path == "/v1/chat/completions"
+    assert out_body["model"] == "qwen3-max"
+    assert "reasoning" not in out_body
+    assert "thinking" not in out_body
+    assert "output_config" not in out_body
+    assert out_body["enable_thinking"] is True
+
+
+def test_convert_request_openai_to_aliyun_maps_reasoning_none_to_disable_thinking():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="openai",
+        supplier_protocol="aliyun",
+        path="/v1/chat/completions",
+        body={
+            "model": "any",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "reasoning": {"effort": "none"},
+        },
+        target_model="qwen3-max",
+    )
+
+    assert path == "/v1/chat/completions"
+    assert "reasoning" not in out_body
+    assert out_body["enable_thinking"] is False
+
+
+def test_convert_request_openai_to_aliyun_preserves_explicit_enable_thinking():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="openai",
+        supplier_protocol="aliyun",
+        path="/v1/chat/completions",
+        body={
+            "model": "any",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "reasoning": {"effort": "high"},
+            "enable_thinking": False,
+        },
+        target_model="qwen3-max",
+    )
+
+    assert path == "/v1/chat/completions"
+    assert "reasoning" not in out_body
+    assert out_body["enable_thinking"] is False
+
+
+def test_convert_request_openai_to_ark_uses_deepseek_thinking_handling():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="openai",
+        supplier_protocol="ark",
+        path="/v1/chat/completions",
+        body={
+            "model": "any",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "reasoning": {"effort": "none"},
+        },
+        target_model="doubao-seed-1-6",
+    )
+
+    assert path == "/v1/chat/completions"
+    assert out_body["model"] == "doubao-seed-1-6"
+    assert "reasoning" not in out_body
+    assert "output_config" not in out_body
+    assert out_body["thinking"] == {"type": "disabled"}
+
+
+def test_convert_request_openai_completion_to_anthropic_maps_reasoning_effort():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="openai",
+        supplier_protocol="anthropic",
+        path="/v1/completions",
+        body={
+            "model": "any",
+            "prompt": "Hi",
+            "reasoning": {"effort": "high"},
+            "max_tokens": 16,
+        },
+        target_model="claude-3-5-sonnet",
+    )
+
+    assert path == "/v1/messages"
+    assert out_body["messages"][0]["content"] in (
+        "Hi",
+        [{"type": "text", "text": "Hi"}],
+    )
+    assert "reasoning" not in out_body
+    assert out_body["thinking"] == {"type": "enabled"}
+    assert out_body["output_config"] == {"effort": "high"}
+
+
+def test_convert_request_openai_completion_to_responses_preserves_reasoning_effort():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="openai",
+        supplier_protocol="openai_responses",
+        path="/v1/completions",
+        body={
+            "model": "any",
+            "prompt": "Hi",
+            "reasoning": {"effort": "minimal"},
+            "max_tokens": 16,
+        },
+        target_model="gpt-5-mini",
+    )
+
+    assert path == "/v1/responses"
+    assert out_body["input"] == "Hi"
+    assert out_body["reasoning"] == {"effort": "minimal"}
 
 
 @pytest.mark.asyncio
@@ -505,6 +764,87 @@ def test_convert_request_anthropic_to_anthropic_maps_max_completion_tokens():
     assert path == "/v1/messages"
     assert out_body["model"] == "claude-3-5-sonnet"
     assert out_body["max_tokens"] == 33
+
+
+def test_convert_request_anthropic_to_openai_maps_thinking_effort():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="anthropic",
+        supplier_protocol="openai",
+        path="/v1/messages",
+        body={
+            "model": "any",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "max"},
+            "max_tokens": 16,
+        },
+        target_model="gpt-5-mini",
+    )
+
+    assert path == "/v1/chat/completions"
+    assert "thinking" not in out_body
+    assert "output_config" not in out_body
+    assert out_body["reasoning"] == {"effort": "xhigh"}
+
+
+def test_convert_request_anthropic_to_openai_maps_disabled_thinking_to_none():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="anthropic",
+        supplier_protocol="openai",
+        path="/v1/messages",
+        body={
+            "model": "any",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "thinking": {"type": "disabled"},
+            "output_config": {"effort": "high"},
+            "max_tokens": 16,
+        },
+        target_model="gpt-5-mini",
+    )
+
+    assert path == "/v1/chat/completions"
+    assert "thinking" not in out_body
+    assert "output_config" not in out_body
+    assert out_body["reasoning"] == {"effort": "none"}
+
+
+def test_convert_request_identity_openai_normalizes_anthropic_reasoning_fields():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="openai",
+        supplier_protocol="openai",
+        path="/v1/chat/completions",
+        body={
+            "model": "any",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "thinking": {"type": "enabled"},
+            "output_config": {"effort": "low"},
+        },
+        target_model="gpt-5-mini",
+    )
+
+    assert path == "/v1/chat/completions"
+    assert "thinking" not in out_body
+    assert "output_config" not in out_body
+    assert out_body["reasoning"] == {"effort": "low"}
+
+
+def test_convert_request_identity_anthropic_normalizes_openai_reasoning_fields():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="anthropic",
+        supplier_protocol="anthropic",
+        path="/v1/messages",
+        body={
+            "model": "any",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "reasoning": {"effort": "high"},
+        },
+        target_model="claude-3-5-sonnet",
+    )
+
+    assert path == "/v1/messages"
+    assert "reasoning" not in out_body
+    assert out_body["thinking"] == {"type": "enabled"}
+    assert out_body["output_config"] == {"effort": "high"}
 
 
 async def _agen(chunks):
@@ -1043,6 +1383,250 @@ def test_convert_request_openai_to_gemini_chat():
     assert out_body["contents"][0]["role"] == "user"
     assert out_body["contents"][0]["parts"][0]["text"] == "Hello Gemini"
     assert out_body["generationConfig"]["maxOutputTokens"] == 64
+
+
+def test_convert_request_openai_to_gemini_preserves_tool_response_name():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="openai",
+        supplier_protocol="gemini",
+        path="/v1/chat/completions",
+        body={
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "user", "content": "Run ls"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {
+                                "name": "exec",
+                                "arguments": "{\"command\":\"ls\"}",
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_123",
+                    "content": "file-a\nfile-b",
+                },
+            ],
+        },
+        target_model="gemini-2.0-flash",
+    )
+    assert path == "/v1beta/models/gemini-2.0-flash:generateContent"
+    assert out_body["contents"][1]["role"] == "model"
+    assert out_body["contents"][1]["parts"][0]["functionCall"]["name"] == "exec"
+    assert out_body["contents"][2]["role"] == "user"
+    assert (
+        out_body["contents"][2]["parts"][0]["functionResponse"]["name"] == "exec"
+    )
+    assert out_body["contents"][2]["parts"][0]["functionResponse"]["id"] == "call_123"
+
+
+def test_convert_request_openai_to_gemini_omits_empty_tool_parameters():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="openai",
+        supplier_protocol="gemini",
+        path="/v1/chat/completions",
+        body={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "List agents"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "agents_list",
+                        "description": "List agents",
+                        "parameters": {"type": "object", "properties": {}, "required": []},
+                    },
+                }
+            ],
+        },
+        target_model="gemini-2.0-flash",
+    )
+    assert path == "/v1beta/models/gemini-2.0-flash:generateContent"
+    decl = out_body["tools"][0]["functionDeclarations"][0]
+    assert decl["name"] == "agents_list"
+    assert "parameters" not in decl
+
+
+def test_convert_request_openai_to_gemini_strips_unsupported_tool_schema_keywords():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="openai",
+        supplier_protocol="gemini",
+        path="/v1/chat/completions",
+        body={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Check tool schemas"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "exec",
+                        "parameters": {
+                            "$schema": "http://json-schema.org/draft-07/schema#",
+                            "type": "object",
+                            "required": ["command"],
+                            "properties": {
+                                "command": {"type": "string"},
+                                "env": {
+                                    "type": "object",
+                                    "propertyNames": {"type": "string"},
+                                    "patternProperties": {
+                                        "^(.*)$": {"type": "string"}
+                                    },
+                                },
+                                "timeout": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                },
+                            },
+                        },
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "browser",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "fields": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {},
+                                        "additionalProperties": True,
+                                    },
+                                },
+                                "request": {
+                                    "type": "object",
+                                    "properties": {
+                                        "fields": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {},
+                                                "additionalProperties": True,
+                                            },
+                                        }
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            ],
+        },
+        target_model="gemini-2.0-flash",
+    )
+
+    assert path == "/v1beta/models/gemini-2.0-flash:generateContent"
+    tools = out_body["tools"][0]["functionDeclarations"]
+    exec_params = tools[0]["parameters"]
+    browser_params = tools[1]["parameters"]
+
+    assert "$schema" not in exec_params
+    assert "patternProperties" not in json.dumps(exec_params)
+    assert "propertyNames" not in json.dumps(exec_params)
+    assert "exclusiveMinimum" not in json.dumps(exec_params)
+    assert "additionalProperties" not in json.dumps(browser_params)
+    assert exec_params["properties"]["env"] == {"type": "object"}
+    assert exec_params["properties"]["timeout"] == {"type": "integer"}
+    assert browser_params["properties"]["fields"]["items"] == {"type": "object"}
+    assert (
+        browser_params["properties"]["request"]["properties"]["fields"]["items"]
+        == {"type": "object"}
+    )
+
+
+def test_convert_request_openai_to_gemini_strips_unsupported_response_schema_keywords():
+    path, out_body = convert_request_for_supplier(
+        request_protocol="openai",
+        supplier_protocol="gemini",
+        path="/v1/chat/completions",
+        body={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Return JSON"}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "schema": {
+                        "$schema": "http://json-schema.org/draft-07/schema#",
+                        "type": "object",
+                        "properties": {
+                            "env": {
+                                "type": "object",
+                                "patternProperties": {
+                                    "^(.*)$": {"type": "string"}
+                                },
+                            }
+                        },
+                    }
+                },
+            },
+        },
+        target_model="gemini-2.0-flash",
+    )
+
+    assert path == "/v1beta/models/gemini-2.0-flash:generateContent"
+    response_schema = out_body["generationConfig"]["responseSchema"]
+    assert "$schema" not in response_schema
+    assert "patternProperties" not in json.dumps(response_schema)
+    assert response_schema["properties"]["env"] == {"type": "object"}
+
+
+def test_sanitize_gemini_request_body_is_public_helper():
+    out_body = sanitize_gemini_request_body(
+        {
+            "tools": [
+                {
+                    "functionDeclarations": [
+                        {
+                            "name": "exec",
+                            "parameters": {
+                                "$schema": "http://json-schema.org/draft-07/schema#",
+                                "type": "object",
+                                "properties": {
+                                    "env": {
+                                        "type": "object",
+                                        "additionalProperties": True,
+                                        "propertyNames": {"type": "string"},
+                                    }
+                                },
+                                "example": {"env": {"PATH": "/tmp"}},
+                            },
+                        }
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "responseSchema": {
+                    "type": "object",
+                    "properties": {
+                        "env": {
+                            "type": "object",
+                            "patternProperties": {"^(.*)$": {"type": "string"}},
+                        },
+                        "timeout": {"type": "integer", "exclusiveMinimum": 0},
+                    },
+                }
+            },
+        }
+    )
+
+    params = out_body["tools"][0]["functionDeclarations"][0]["parameters"]
+    response_schema = out_body["generationConfig"]["responseSchema"]
+    assert "$schema" not in params
+    assert "additionalProperties" not in json.dumps(params)
+    assert "propertyNames" not in json.dumps(params)
+    assert "patternProperties" not in json.dumps(response_schema)
+    assert "exclusiveMinimum" not in json.dumps(response_schema)
+    assert params["example"] == {"env": {"PATH": "/tmp"}}
 
 
 def test_convert_request_openai_completion_to_gemini():

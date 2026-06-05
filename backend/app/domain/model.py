@@ -330,6 +330,34 @@ class ModelMappingProviderResponse(ModelMappingProvider):
     provider_protocol: Optional[str] = Field(None, description="Provider Protocol Type")
     # Provider Active Status
     provider_is_active: Optional[bool] = Field(None, description="Provider Active Status")
+    # Resolved billing config for history copy/apply scenarios
+    resolved_billing_mode: Optional[BillingMode] = Field(
+        None, description="Resolved billing mode after applying model fallback"
+    )
+    resolved_input_price: Optional[float] = Field(
+        None, description="Resolved input price ($/1M tokens)"
+    )
+    resolved_output_price: Optional[float] = Field(
+        None, description="Resolved output price ($/1M tokens)"
+    )
+    resolved_per_request_price: Optional[float] = Field(
+        None, description="Resolved per-request price ($)"
+    )
+    resolved_per_image_price: Optional[float] = Field(
+        None, description="Resolved per-image price ($)"
+    )
+    resolved_tiered_pricing: Optional[list[TokenTierPrice]] = Field(
+        None, description="Resolved tiered pricing"
+    )
+    resolved_cache_billing_enabled: Optional[bool] = Field(
+        None, description="Resolved cache billing enabled"
+    )
+    resolved_cached_input_price: Optional[float] = Field(
+        None, ge=0, description="Resolved cached input price ($/1M tokens)"
+    )
+    resolved_cached_output_price: Optional[float] = Field(
+        None, ge=0, description="Resolved cached output price ($/1M tokens)"
+    )
     
     model_config = ConfigDict(from_attributes=True)
 

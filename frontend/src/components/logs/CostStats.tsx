@@ -41,6 +41,8 @@ interface CostStatsProps {
   rangeEnd?: string;
   bucket?: "hour" | "day";
   maxBars?: number;
+  withoutCard?: boolean;
+  hideTitle?: boolean;
 }
 
 type Segment = {
@@ -412,6 +414,8 @@ export function CostStats({
   bucket = "day",
   maxBars = 30,
   modelStatsControls,
+  withoutCard = false,
+  hideTitle = false,
 }: CostStatsProps) {
   const t = useTranslations("logs");
   const modelMax = useMemo(() => {
@@ -572,10 +576,14 @@ export function CostStats({
     [t],
   );
 
-  return (
-    <Card>
-      <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <CardTitle className="shrink-0">{t("costStats.activity")}</CardTitle>
+  const content = (
+    <>
+      <CardHeader
+        className={`flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between ${withoutCard ? "px-0 pt-0" : ""}`}
+      >
+        {!hideTitle ? (
+          <CardTitle className="shrink-0">{t("costStats.activity")}</CardTitle>
+        ) : null}
 
         {onRefresh || headerActions || headerExtras ? (
           <div className="ml-auto flex w-full flex-col items-end gap-2 sm:w-auto">
@@ -608,7 +616,7 @@ export function CostStats({
           </div>
         ) : null}
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className={`space-y-4 ${withoutCard ? "px-0 pb-0" : ""}`}>
         {loading && <LoadingSpinner />}
         {!loading && !stats && (
           <div className="text-sm text-muted-foreground">
@@ -850,6 +858,12 @@ export function CostStats({
           </>
         )}
       </CardContent>
-    </Card>
+    </>
   );
+
+  if (withoutCard) {
+    return <section>{content}</section>;
+  }
+
+  return <Card>{content}</Card>;
 }

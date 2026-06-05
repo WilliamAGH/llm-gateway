@@ -86,6 +86,34 @@ async def init_db() -> None:
         await conn.run_sync(_run_migrations)
 
 
+def _drop_request_logs_provider_fk(sync_conn, inspector_obj=None) -> None:
+    """Drop the legacy provider foreign key from request_logs on PostgreSQL."""
+    if sync_conn.dialect.name != "postgresql":
+        return
+
+    inspector_obj = inspector_obj or inspect(sync_conn)
+    table_names = set(inspector_obj.get_table_names())
+    if "request_logs" not in table_names:
+        return
+
+    for fk in inspector_obj.get_foreign_keys("request_logs"):
+        if fk.get("referred_table") != "service_providers":
+            continue
+        if "provider_id" not in (fk.get("constrained_columns") or []):
+            continue
+
+        constraint_name = fk.get("name")
+        if not constraint_name:
+            continue
+
+        escaped_name = constraint_name.replace('"', '""')
+        sync_conn.execute(
+            text(
+                f'ALTER TABLE request_logs DROP CONSTRAINT IF EXISTS "{escaped_name}"'
+            )
+        )
+
+
 def _run_migrations(sync_conn) -> None:
     """
     Lightweight, in-place schema migrations for existing databases.
@@ -147,10 +175,12 @@ def _run_migrations(sync_conn) -> None:
             "upstream_response_body": "upstream_response_body TEXT",
             "response_headers": "response_headers JSON",
             "request_path": "request_path VARCHAR(200)",
+            "request_url": "request_url VARCHAR(1000)",
             "request_method": "request_method VARCHAR(10)",
             "upstream_url": "upstream_url VARCHAR(500)",
             "cached_input_cost": "cached_input_cost NUMERIC(12,4)",
             "cached_output_cost": "cached_output_cost NUMERIC(12,4)",
+            "user_id": "user_id VARCHAR(255)",
         },
     )
     ensure_columns(
@@ -162,6 +192,7 @@ def _run_migrations(sync_conn) -> None:
             "remark": "remark TEXT",
         },
     )
+    _drop_request_logs_provider_fk(sync_conn, inspector)
 
     # Migrate existing request_logs data to request_log_details table
     if "request_log_details" in table_names and "request_logs" in table_names:

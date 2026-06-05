@@ -10,6 +10,7 @@ services:
       DEBUG: ${DEBUG:-false}
       DATABASE_TYPE: ${DATABASE_TYPE:-sqlite}
       DATABASE_URL: ${DATABASE_URL:-sqlite+aiosqlite:////data/llm_gateway.db}
+      ENABLE_VIEW_API_KEYS: ${ENABLE_VIEW_API_KEYS:-false}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       NEXT_TELEMETRY_DISABLED: "1"
