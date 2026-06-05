@@ -964,17 +964,27 @@ async def test_convert_stream_openai_to_anthropic_multiple_tool_calls_without_in
 
 
 class TestImageDefaultResponseFormat:
-    """Test that image API requests get response_format=b64_json by default."""
+    """Test image API response_format defaults for legacy image models only."""
 
-    def test_generations_default_response_format(self):
+    def test_generations_default_response_format_for_dall_e(self):
         path, body = convert_request_for_supplier(
             request_protocol="openai",
             supplier_protocol="openai",
             path="/v1/images/generations",
-            body={"model": "gpt-image-1", "prompt": "A cat"},
-            target_model="gpt-image-1",
+            body={"model": "dall-e-3", "prompt": "A cat"},
+            target_model="dall-e-3",
         )
         assert body["response_format"] == "b64_json"
+
+    def test_generations_omits_response_format_for_gpt_image_models(self):
+        path, body = convert_request_for_supplier(
+            request_protocol="openai",
+            supplier_protocol="openai",
+            path="/v1/images/generations",
+            body={"model": "gpt-image-2", "prompt": "A cat"},
+            target_model="gpt-image-2",
+        )
+        assert "response_format" not in body
 
     def test_generations_explicit_response_format_preserved(self):
         path, body = convert_request_for_supplier(
@@ -986,7 +996,7 @@ class TestImageDefaultResponseFormat:
         )
         assert body["response_format"] == "url"
 
-    def test_edits_default_response_format(self):
+    def test_edits_omit_response_format_for_gpt_image_models(self):
         path, body = convert_request_for_supplier(
             request_protocol="openai",
             supplier_protocol="openai",
@@ -994,7 +1004,7 @@ class TestImageDefaultResponseFormat:
             body={"model": "gpt-image-1", "prompt": "Add a hat"},
             target_model="gpt-image-1",
         )
-        assert body["response_format"] == "b64_json"
+        assert "response_format" not in body
 
     def test_variations_default_response_format(self):
         path, body = convert_request_for_supplier(

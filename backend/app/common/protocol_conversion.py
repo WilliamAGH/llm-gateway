@@ -83,11 +83,13 @@ def normalize_protocol(protocol: str) -> str:
 
 
 _IMAGE_PATHS = {"/v1/images/generations", "/v1/images/edits", "/v1/images/variations"}
+_LEGACY_IMAGE_RESPONSE_FORMAT_MODELS = {"dall-e-2", "dall-e-3"}
 
 
-def _apply_image_defaults(path: str, body: dict[str, Any]) -> None:
+def _apply_image_defaults(path: str, body: dict[str, Any], target_model: str) -> None:
     """Apply default parameters for image API requests."""
-    if path in _IMAGE_PATHS:
+    model = str(body.get("model") or target_model).strip().lower()
+    if path in _IMAGE_PATHS and model in _LEGACY_IMAGE_RESPONSE_FORMAT_MODELS:
         body.setdefault("response_format", "b64_json")
 
 
@@ -136,7 +138,7 @@ def convert_request_for_supplier(
             options=options,
         )
 
-        _apply_image_defaults(result.path, result.body)
+        _apply_image_defaults(result.path, result.body, target_model)
 
         return result.path, result.body
 
