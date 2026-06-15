@@ -69,6 +69,8 @@ from .converters import (
     SDKRequestConverter,
     SDKResponseConverter,
     SDKStreamConverter,
+    sanitize_anthropic_tool_schema,
+    sanitize_anthropic_tools,
     sanitize_gemini_request_body,
 )
 
@@ -390,6 +392,8 @@ __all__ = [
     "convert_stream",
     "normalize_protocol",
     "reset_registry",
+    "sanitize_anthropic_tool_schema",
+    "sanitize_anthropic_tools",
     "sanitize_gemini_request_body",
     # Types
     "Protocol",

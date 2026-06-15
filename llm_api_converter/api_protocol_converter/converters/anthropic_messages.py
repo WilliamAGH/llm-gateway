@@ -4,6 +4,7 @@ Anthropic Messages API Encoder/Decoder
 Converts between Anthropic Messages API format and the Intermediate Representation.
 """
 
+import copy
 import json
 import re
 import time
@@ -33,6 +34,47 @@ from ..ir import (
     ToolChoiceType,
 )
 from .exceptions import CapabilityNotSupportedError, ConversionError, ValidationError
+
+
+_TOP_LEVEL_COMBINATORS = ("anyOf", "oneOf", "allOf")
+
+
+def _strip_top_level_combinators(schema: Any) -> Any:
+    """Collapse top-level anyOf/oneOf/allOf in a tool input schema.
+
+    The Anthropic API rejects ``input_schema`` with ``anyOf``/``oneOf``/``allOf``
+    at the top level. This merges each branch's ``properties`` into the
+    top-level ``properties`` (union), clears top-level ``required``, removes the
+    combinator keys, and ensures ``type``/``properties``. Only the top level is
+    touched; nested combinators are valid for Anthropic and left intact.
+
+    Keep this in sync with ``sanitize_anthropic_tool_schema`` in
+    ``backend/app/common/protocol/converters.py`` — the two implementations must
+    behave identically (this package must not import from ``backend``).
+    """
+    if not isinstance(schema, dict):
+        return schema
+    if not any(key in schema for key in _TOP_LEVEL_COMBINATORS):
+        return schema
+
+    cleaned = copy.deepcopy(schema)
+    merged_properties: Dict[str, Any] = dict(cleaned.get("properties") or {})
+    for key in _TOP_LEVEL_COMBINATORS:
+        branches = cleaned.pop(key, None)
+        if not isinstance(branches, list):
+            continue
+        for branch in branches:
+            if not isinstance(branch, dict):
+                continue
+            branch_properties = branch.get("properties")
+            if isinstance(branch_properties, dict):
+                for prop_name, prop_schema in branch_properties.items():
+                    merged_properties.setdefault(prop_name, prop_schema)
+
+    cleaned["type"] = "object"
+    cleaned["properties"] = merged_properties
+    cleaned["required"] = []
+    return cleaned
 
 
 class AnthropicMessagesDecoder:
@@ -703,9 +745,12 @@ class AnthropicMessagesEncoder:
         """Encode tool declarations."""
         result = []
         for tool in tools:
+            input_schema = _strip_top_level_combinators(
+                tool.parameters or {"type": "object", "properties": {}}
+            )
             encoded: Dict[str, Any] = {
                 "name": tool.name,
-                "input_schema": tool.parameters or {"type": "object", "properties": {}},
+                "input_schema": input_schema,
             }
             if tool.description:
                 encoded["description"] = tool.description

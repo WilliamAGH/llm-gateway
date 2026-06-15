@@ -559,6 +559,78 @@ def _sanitize_gemini_request_body(body: Dict[str, Any]) -> Dict[str, Any]:
     return sanitize_gemini_request_body(body)
 
 
+_ANTHROPIC_TOP_LEVEL_COMBINATORS = ("anyOf", "oneOf", "allOf")
+
+
+def sanitize_anthropic_tool_schema(schema: Any) -> Any:
+    """Strip top-level anyOf/oneOf/allOf from a tool input schema for Anthropic.
+
+    The Anthropic API rejects ``tool.input_schema`` that has ``anyOf``,
+    ``oneOf``, or ``allOf`` at the top level. This collapses those combinators
+    into a plain object schema:
+
+    - each branch's ``properties`` is merged into the top-level ``properties``
+      (union; existing keys win),
+    - top-level ``required`` is cleared (mutually-exclusive branches cannot be
+      expressed as a single required list),
+    - the combinator keys are removed and ``type``/``properties`` are ensured.
+
+    Only the top level is touched; nested combinators are valid for Anthropic
+    and are left intact. Returns a deep copy and never mutates the input.
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    if not any(key in schema for key in _ANTHROPIC_TOP_LEVEL_COMBINATORS):
+        return copy.deepcopy(schema)
+
+    cleaned = copy.deepcopy(schema)
+    merged_properties: Dict[str, Any] = dict(cleaned.get("properties") or {})
+
+    for key in _ANTHROPIC_TOP_LEVEL_COMBINATORS:
+        branches = cleaned.pop(key, None)
+        if not isinstance(branches, list):
+            continue
+        for branch in branches:
+            if not isinstance(branch, dict):
+                continue
+            branch_properties = branch.get("properties")
+            if isinstance(branch_properties, dict):
+                for prop_name, prop_schema in branch_properties.items():
+                    merged_properties.setdefault(prop_name, prop_schema)
+
+    cleaned["type"] = "object"
+    cleaned["properties"] = merged_properties
+    cleaned["required"] = []
+    return cleaned
+
+
+def sanitize_anthropic_tools(tools: Any) -> Any:
+    """Strip top-level combinators from OpenAI-format tool parameters.
+
+    Mirrors :func:`sanitize_gemini_request_body`'s defensive traversal: walks
+    ``tools[].function.parameters`` and rewrites each via
+    :func:`sanitize_anthropic_tool_schema`. Non-dict / malformed entries are
+    skipped. Returns a new list and never mutates the input.
+    """
+    if not isinstance(tools, list):
+        return tools
+
+    out: List[Any] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            out.append(tool)
+            continue
+        new_tool = copy.deepcopy(tool)
+        function = new_tool.get("function")
+        if isinstance(function, dict):
+            params = function.get("parameters")
+            if isinstance(params, dict):
+                function["parameters"] = sanitize_anthropic_tool_schema(params)
+        out.append(new_tool)
+    return out
+
+
 def _openai_tools_to_gemini_tools(tools: Any) -> Optional[list[Dict[str, Any]]]:
     if not isinstance(tools, list):
         return None

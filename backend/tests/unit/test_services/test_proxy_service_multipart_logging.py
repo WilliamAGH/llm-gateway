@@ -73,6 +73,7 @@ async def test_process_request_sanitizes_multipart_body_and_binary_response():
                 api_key_name="k",
                 request_protocol="openai",
                 path="/v1/audio/transcriptions",
+                request_url="/v1/audio/transcriptions",
                 method="POST",
                 headers={},
                 body=request_body,

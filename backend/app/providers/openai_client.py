@@ -10,6 +10,7 @@ from typing import Any, AsyncGenerator, Optional
 
 import httpx
 
+from app.common.protocol import sanitize_anthropic_tools
 from app.common.upstream_url import build_upstream_url
 from app.common.timer import Timer
 from app.config import get_settings
@@ -34,6 +35,24 @@ class OpenAIClient(ProviderClient):
         """Initialize client"""
         settings = get_settings()
         self.timeout = settings.HTTP_TIMEOUT
+
+    @staticmethod
+    def _sanitize_tools_for_anthropic_upstream(
+        body: dict[str, Any], target_model: str
+    ) -> dict[str, Any]:
+        """Strip top-level anyOf/oneOf/allOf from tools for Anthropic upstreams.
+
+        Some Anthropic backends are configured as OpenAI-protocol providers, so
+        the request reaches this client unconverted. Anthropic rejects tool
+        ``input_schema`` with top-level combinators, so clean them here when the
+        target model is a Claude model. No-op otherwise.
+        """
+        if not target_model or not target_model.lower().startswith("claude"):
+            return body
+        if not isinstance(body.get("tools"), list):
+            return body
+        body["tools"] = sanitize_anthropic_tools(body["tools"])
+        return body
     
     async def forward(
         self,
@@ -68,6 +87,9 @@ class OpenAIClient(ProviderClient):
         # Prepare request
         url = build_upstream_url(base_url, path)
         prepared_body = self._prepare_body(body, target_model)
+        prepared_body = self._sanitize_tools_for_anthropic_upstream(
+            prepared_body, target_model
+        )
         multipart = self._split_multipart_body(prepared_body)
         prepared_headers = self._prepare_headers(headers, api_key, extra_headers)
         prepared_files = None
@@ -276,6 +298,9 @@ class OpenAIClient(ProviderClient):
         # Prepare request
         url = build_upstream_url(base_url, path)
         prepared_body = self._prepare_body(body, target_model)
+        prepared_body = self._sanitize_tools_for_anthropic_upstream(
+            prepared_body, target_model
+        )
         multipart = self._split_multipart_body(prepared_body)
         prepared_headers = self._prepare_headers(headers, api_key, extra_headers)
         prepared_files = None

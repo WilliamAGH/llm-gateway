@@ -174,6 +174,47 @@ class TestOpenAIChatToAnthropicMessages:
         # Anthropic uses input_schema instead of parameters
         assert "input_schema" in tool
 
+    def test_request_with_top_level_anyof_tool_schema(self):
+        """Top-level anyOf/oneOf/allOf must be stripped from input_schema.
+
+        Anthropic rejects ``input_schema`` with top-level combinators; the
+        encoder collapses them into a plain object schema while keeping the
+        branch properties.
+        """
+        request = {
+            "model": "gpt-4o",
+            "max_tokens": 100,
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "share_artifact",
+                        "parameters": {
+                            "type": "object",
+                            "anyOf": [
+                                {"required": ["path"]},
+                                {"required": ["content", "filename"]},
+                            ],
+                            "properties": {
+                                "path": {"type": "string"},
+                                "content": {"type": "string"},
+                                "filename": {"type": "string"},
+                            },
+                            "required": [],
+                        },
+                    },
+                }
+            ],
+        }
+        result = openai_chat_to_anthropic_messages_request(request)
+        schema = result["tools"][0]["input_schema"]
+        assert "anyOf" not in schema
+        assert "oneOf" not in schema
+        assert "allOf" not in schema
+        assert schema["type"] == "object"
+        assert set(schema["properties"]) >= {"path", "content", "filename"}
+
     def test_multimodal_request(self):
         """Test multimodal (image) request conversion."""
         result = openai_chat_to_anthropic_messages_request(
