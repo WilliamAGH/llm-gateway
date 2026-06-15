@@ -12,6 +12,14 @@ import httpx
 
 from app.common.protocol import sanitize_gemini_request_body
 from app.common.timer import Timer
+from app.common.http_timeout import (
+    TIER_HEADER,
+    StreamDeadlinePolicy,
+    StreamStalled,
+    build_http_timeout,
+    header_value,
+    iter_with_stall_guard,
+)
 from app.config import get_settings
 from app.providers.base import ProviderClient, ProviderResponse
 
@@ -23,7 +31,8 @@ class GeminiClient(ProviderClient):
 
     def __init__(self):
         settings = get_settings()
-        self.timeout = settings.HTTP_TIMEOUT
+        self.timeout = build_http_timeout(settings.HTTP_TIMEOUT)
+        self.stream_policy = StreamDeadlinePolicy.from_settings(settings)
 
     def _prepare_headers(
         self,
@@ -251,6 +260,7 @@ class GeminiClient(ProviderClient):
         headers: dict[str, str],
         body: dict[str, Any],
         target_model: str,  # Gemini model is encoded in the URL path, not in body
+        requested_model: str = "",
         extra_headers: Optional[dict[str, str]] = None,
         proxy_config: Optional[dict[str, str]] = None,
     ) -> AsyncGenerator[tuple[bytes, ProviderResponse], None]:
@@ -296,7 +306,16 @@ class GeminiClient(ProviderClient):
                         yield body_bytes or b"", provider_response
                         return
 
-                    async for chunk in response.aiter_bytes():
+                    first_byte_timeout, idle_timeout = self.stream_policy.for_request(
+                        tier=header_value(headers, TIER_HEADER),
+                        requested_model=requested_model,
+                        target_model=target_model,
+                    )
+                    async for chunk in iter_with_stall_guard(
+                        response.aiter_bytes(),
+                        first_byte_timeout=first_byte_timeout,
+                        idle_timeout=idle_timeout,
+                    ):
                         if first_chunk:
                             timer.mark_first_byte()
                             provider_response.first_byte_delay_ms = (
@@ -308,6 +327,15 @@ class GeminiClient(ProviderClient):
 
                     timer.stop()
                     provider_response.total_time_ms = timer.total_time_ms
+
+        except StreamStalled as e:
+            timer.stop()
+            yield b"", ProviderResponse(
+                status_code=504,
+                error=f"Request timeout: {str(e)}",
+                first_byte_delay_ms=timer.first_byte_delay_ms,
+                total_time_ms=timer.total_time_ms,
+            )
 
         except httpx.TimeoutException as e:
             timer.stop()
@@ -323,6 +351,18 @@ class GeminiClient(ProviderClient):
             yield b"", ProviderResponse(
                 status_code=502,
                 error=f"Request error: {str(e)}",
+                first_byte_delay_ms=timer.first_byte_delay_ms,
+                total_time_ms=timer.total_time_ms,
+            )
+
+        except Exception as e:
+            # Catch-all so an unexpected error never silently kills the generator
+            # mid-stream. CancelledError is a BaseException and is intentionally
+            # NOT caught (client disconnect).
+            timer.stop()
+            yield b"", ProviderResponse(
+                status_code=500,
+                error=f"Unexpected stream error: {str(e)}",
                 first_byte_delay_ms=timer.first_byte_delay_ms,
                 total_time_ms=timer.total_time_ms,
             )

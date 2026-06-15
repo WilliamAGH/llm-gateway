@@ -92,6 +92,41 @@ def _extract_user_id(headers: dict[str, str]) -> str | None:
     return None
 
 
+class StreamInterrupted(Exception):
+    """A provider stream failed after its first successful chunk.
+
+    Raised when a mid-stream chunk carries an unsuccessful ProviderResponse (for
+    example the provider stall-guard's 504). It is a plain ``Exception`` so the
+    stream handler's ``except Exception`` surfaces it as an in-band error frame,
+    while ``asyncio.CancelledError`` (client disconnect) still propagates.
+    """
+
+
+def _stream_error_frames(request_protocol: Optional[str], message: str) -> list[bytes]:
+    """In-band error frames for a stream that fails after headers are sent.
+
+    Once the 200 + headers have flushed the HTTP status cannot change, so the
+    client is told explicitly (in its own protocol) instead of receiving a
+    silently truncated stream. Single owner for the OpenAI vs Anthropic SSE
+    shapes used wherever a mid-stream failure is surfaced to the client.
+    """
+    if (request_protocol or "openai").lower() == "anthropic":
+        return [
+            f"event: error\ndata: {json.dumps({'type': 'error', 'error': {'message': message}}, ensure_ascii=False)}\n\n".encode(
+                "utf-8"
+            ),
+            f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'}, ensure_ascii=False)}\n\n".encode(
+                "utf-8"
+            ),
+        ]
+    return [
+        f"data: {json.dumps({'error': {'message': message}}, ensure_ascii=False)}\n\n".encode(
+            "utf-8"
+        ),
+        b"data: [DONE]\n\n",
+    ]
+
+
 class ProxyService:
     """
     Proxy Core Service
@@ -1071,6 +1106,7 @@ class ProxyService:
                 headers=headers,
                 body=supplier_body,
                 target_model=candidate.target_model,
+                requested_model=requested_model,
                 extra_headers=candidate.extra_headers,
                 proxy_config=proxy_config,
             )
@@ -1079,6 +1115,18 @@ class ProxyService:
                 try:
                     first_chunk, first_resp = await anext(upstream_gen)
                 except StopAsyncIteration:
+                    # Upstream produced zero chunks (e.g. 200 with an empty body).
+                    # Surface an explicit failure so retry/failover and the request
+                    # log get a clear reason instead of an empty stream.
+                    logger.warning(
+                        "Empty upstream stream: provider_id=%s, provider_name=%s",
+                        candidate.provider_id,
+                        candidate.provider_name,
+                    )
+                    yield b"", ProviderResponse(
+                        status_code=502,
+                        error="Upstream returned an empty stream (no chunks)",
+                    )
                     return
 
                 if not first_resp.is_success:
@@ -1121,7 +1169,17 @@ class ProxyService:
 
                     async for event in process_chunk(first_chunk):
                         yield event
-                    async for chunk, _ in upstream_gen:
+                    async for chunk, chunk_resp in upstream_gen:
+                        if not chunk_resp.is_success:
+                            # A mid-stream failure (e.g. the provider stall-guard
+                            # 504) arrives as an error tuple after the first
+                            # chunk. The 200 + headers are already flushed, so
+                            # raise and let wrapped()'s handler emit an in-band
+                            # error frame instead of silently truncating.
+                            raise StreamInterrupted(
+                                chunk_resp.error
+                                or f"upstream returned {chunk_resp.status_code} mid-stream"
+                            )
                         async for event in process_chunk(chunk):
                             yield event
 
@@ -1183,27 +1241,8 @@ class ProxyService:
                         supplier_protocol or candidate.protocol,
                         err,
                     )
-                    if (request_protocol or "openai").lower() == "anthropic":
-                        yield (
-                            f"event: error\ndata: {json.dumps({'type': 'error', 'error': {'message': err}}, ensure_ascii=False)}\n\n".encode(
-                                "utf-8"
-                            ),
-                            first_resp,
-                        )
-                        yield (
-                            f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'}, ensure_ascii=False)}\n\n".encode(
-                                "utf-8"
-                            ),
-                            first_resp,
-                        )
-                    else:
-                        yield (
-                            f"data: {json.dumps({'error': {'message': err}}, ensure_ascii=False)}\n\n".encode(
-                                "utf-8"
-                            ),
-                            first_resp,
-                        )
-                        yield (b"data: [DONE]\n\n", first_resp)
+                    for frame in _stream_error_frames(request_protocol, err):
+                        yield frame, first_resp
                     return
 
             return wrapped()
@@ -1351,8 +1390,13 @@ class ProxyService:
                 stream_error = "client_disconnected"
                 raise
             except Exception as e:
-                # Log stream interruption exception, but do not throw upwards to avoid polluting StreamingResponse logs
+                # 200 + headers are already flushed, so the HTTP status can't
+                # change; surface an explicit in-band error in the client's
+                # protocol instead of a silently truncated stream, then end.
                 stream_error = str(e)
+                for frame in _stream_error_frames(request_protocol, str(e)):
+                    record_stream_chunk(frame)
+                    yield frame
                 return
             finally:
                 usage_result = usage_acc.finalize()

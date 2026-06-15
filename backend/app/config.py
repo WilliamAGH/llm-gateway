@@ -36,8 +36,24 @@ class Settings(BaseSettings):
     RETRY_DELAY_MS: int = 1000
 
     # HTTP Client Config
-    # Request timeout (seconds)
+    # Request timeout (seconds) — the whole-generation read budget.
     HTTP_TIMEOUT: int = 1800
+    # Streaming stall detection (seconds). A provider that returns headers but no
+    # first token, or stops mid-stream, is surfaced as a 504 and failed over
+    # instead of occupying a slot for the full HTTP_TIMEOUT budget.
+    #
+    # First-byte (time-to-first-token) varies by class because on-prem local
+    # models can spend minutes on prompt processing before the first token; SaaS
+    # models cannot. The long latency is first-token, not inter-chunk, so the idle
+    # deadline stays tight and production fast-fail is preserved on shared infra.
+    #   - SaaS / production tier:        STREAM_FIRST_BYTE_TIMEOUT
+    #   - on-prem (:onprem) production:  STREAM_ONPREM_FIRST_BYTE_TIMEOUT
+    #   - batch tier (x-tier: batch):    STREAM_BATCH_FIRST_BYTE_TIMEOUT
+    STREAM_FIRST_BYTE_TIMEOUT: int = 60
+    STREAM_ONPREM_FIRST_BYTE_TIMEOUT: int = 75
+    STREAM_BATCH_FIRST_BYTE_TIMEOUT: int = 900
+    STREAM_IDLE_TIMEOUT: int = 20
+    STREAM_ONPREM_IDLE_TIMEOUT: int = 60
     # Whether provider base URLs may use private/internal IP addresses
     ALLOW_PRIVATE_IP_PROVIDER: bool = False
 

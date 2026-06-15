@@ -13,6 +13,14 @@ import httpx
 
 from app.common.upstream_url import build_upstream_url
 from app.common.timer import Timer
+from app.common.http_timeout import (
+    TIER_HEADER,
+    StreamDeadlinePolicy,
+    StreamStalled,
+    build_http_timeout,
+    header_value,
+    iter_with_stall_guard,
+)
 from app.config import get_settings
 from app.providers.base import ProviderClient, ProviderResponse
 
@@ -33,7 +41,8 @@ class AnthropicClient(ProviderClient):
     def __init__(self):
         """Initialize client"""
         settings = get_settings()
-        self.timeout = settings.HTTP_TIMEOUT
+        self.timeout = build_http_timeout(settings.HTTP_TIMEOUT)
+        self.stream_policy = StreamDeadlinePolicy.from_settings(settings)
 
     @staticmethod
     def _is_minimax_base_url(base_url: str) -> bool:
@@ -325,6 +334,7 @@ class AnthropicClient(ProviderClient):
         headers: dict[str, str],
         body: dict[str, Any],
         target_model: str,
+        requested_model: str = "",
         extra_headers: Optional[dict[str, str]] = None,
         proxy_config: Optional[dict[str, str]] = None,
     ) -> AsyncGenerator[tuple[bytes, ProviderResponse], None]:
@@ -389,19 +399,37 @@ class AnthropicClient(ProviderClient):
                         yield body_bytes or b"", provider_response
                         return
                     
-                    async for chunk in response.aiter_bytes():
+                    first_byte_timeout, idle_timeout = self.stream_policy.for_request(
+                        tier=header_value(headers, TIER_HEADER),
+                        requested_model=requested_model,
+                        target_model=target_model,
+                    )
+                    async for chunk in iter_with_stall_guard(
+                        response.aiter_bytes(),
+                        first_byte_timeout=first_byte_timeout,
+                        idle_timeout=idle_timeout,
+                    ):
                         if first_chunk:
                             timer.mark_first_byte()
                             provider_response.first_byte_delay_ms = (
                                 timer.first_byte_delay_ms
                             )
                             first_chunk = False
-                        
+
                         yield chunk, provider_response
-                    
+
                     timer.stop()
                     provider_response.total_time_ms = timer.total_time_ms
-        
+
+        except StreamStalled as e:
+            timer.stop()
+            yield b"", ProviderResponse(
+                status_code=504,
+                error=f"Request timeout: {str(e)}",
+                first_byte_delay_ms=timer.first_byte_delay_ms,
+                total_time_ms=timer.total_time_ms,
+            )
+
         except httpx.TimeoutException as e:
             timer.stop()
             yield b"", ProviderResponse(
@@ -410,12 +438,24 @@ class AnthropicClient(ProviderClient):
                 first_byte_delay_ms=timer.first_byte_delay_ms,
                 total_time_ms=timer.total_time_ms,
             )
-        
+
         except httpx.RequestError as e:
             timer.stop()
             yield b"", ProviderResponse(
                 status_code=502,
                 error=f"Request error: {str(e)}",
+                first_byte_delay_ms=timer.first_byte_delay_ms,
+                total_time_ms=timer.total_time_ms,
+            )
+
+        except Exception as e:
+            # Catch-all so an unexpected error never silently kills the generator
+            # mid-stream. CancelledError is a BaseException and is intentionally
+            # NOT caught (client disconnect).
+            timer.stop()
+            yield b"", ProviderResponse(
+                status_code=500,
+                error=f"Unexpected stream error: {str(e)}",
                 first_byte_delay_ms=timer.first_byte_delay_ms,
                 total_time_ms=timer.total_time_ms,
             )
