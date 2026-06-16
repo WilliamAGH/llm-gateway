@@ -7,3 +7,4 @@ data/
 .venv/
 backend/.venv/
 *.local.sh
+.DS_Store

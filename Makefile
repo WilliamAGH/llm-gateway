@@ -18,4 +18,10 @@ start-frontend:
 dev:
 	./start-dev.sh
 
-.PHONY: start-backend start-frontend test test-backend dev
+# Build origin/dev -> push Nexus (dev-latest + dev-<sha>) -> Coolify redeploy -> verify.
+# Self-verifying; see scripts/deploy-dev.sh and the inference-network repo's
+# docs/coolify-source-mapping.md for the full topology.
+deploy-dev:
+	./scripts/deploy-dev.sh
+
+.PHONY: start-backend start-frontend test test-backend dev deploy-dev
