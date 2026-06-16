@@ -228,6 +228,48 @@ class TestOpenAIChatToAnthropicMessages:
         assert "text" in types
         assert "image" in types
 
+    def test_request_preserves_cache_control(self):
+        """A prompt-cache breakpoint on a content part or tool survives OpenAI -> Anthropic.
+
+        Regression: the IR previously had no cache_control field, so cross-protocol conversion
+        silently dropped the breakpoint and disabled Anthropic prompt caching.
+        """
+        request = {
+            "model": "gpt-4o",
+            "max_tokens": 100,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "long stable prefix",
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                }
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+        result = openai_chat_to_anthropic_messages_request(request)
+
+        # A single text block must stay structured (not collapse to a string) so the
+        # breakpoint survives, and the breakpoint itself must be present.
+        content = result["messages"][0]["content"]
+        assert isinstance(content, list)
+        assert content[0]["type"] == "text"
+        assert content[0]["cache_control"] == {"type": "ephemeral"}
+        assert result["tools"][0]["cache_control"] == {"type": "ephemeral"}
+
     def test_simple_response(self):
         """Test simple response conversion."""
         result = openai_chat_to_anthropic_messages_response(OPENAI_CHAT_SIMPLE_RESPONSE)

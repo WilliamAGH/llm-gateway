@@ -216,9 +216,11 @@ class OpenAIChatDecoder:
     def _decode_content_block(self, block: Dict[str, Any]) -> Optional[IRContentBlock]:
         """Decode a single content block."""
         block_type = block.get("type", "text")
+        # Carry a prompt-cache breakpoint through the IR (it would otherwise be dropped here).
+        cache_control = block.get("cache_control")
 
         if block_type == "text":
-            return IRTextBlock(text=block.get("text", ""))
+            return IRTextBlock(text=block.get("text", ""), cache_control=cache_control)
 
         elif block_type == "image_url":
             image_url = block.get("image_url", {})
@@ -237,12 +239,14 @@ class OpenAIChatDecoder:
                     base64_data=base64_data,
                     media_type=media_type,
                     detail=detail,
+                    cache_control=cache_control,
                 )
             else:
                 return IRImageBlock(
                     source_type=ImageSourceType.URL,
                     url=url,
                     detail=detail,
+                    cache_control=cache_control,
                 )
 
         elif block_type == "input_audio":
@@ -300,6 +304,7 @@ class OpenAIChatDecoder:
                         description=func.get("description"),
                         parameters=func.get("parameters", {}),
                         strict=func.get("strict", False),
+                        cache_control=tool.get("cache_control"),
                     )
                 )
         return ir_tools

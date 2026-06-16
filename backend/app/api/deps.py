@@ -25,6 +25,7 @@ from app.services import (
     CostFirstStrategy,
     LogService,
     ModelService,
+    PrefixAffinityStrategy,
     PriorityStrategy,
     ProviderService,
     ProxyService,
@@ -36,6 +37,7 @@ from app.services.protocol_hooks import ProtocolConversionHooks
 _round_robin_strategy = RoundRobinStrategy()
 _cost_first_strategy = CostFirstStrategy()
 _priority_strategy = PriorityStrategy()
+_prefix_affinity_strategy = PrefixAffinityStrategy()
 
 
 async def get_db():
@@ -129,6 +131,7 @@ def get_proxy_service(db: DbSession) -> ProxyService:
         round_robin_strategy=_round_robin_strategy,
         cost_first_strategy=_cost_first_strategy,
         priority_strategy=_priority_strategy,
+        prefix_affinity_strategy=_prefix_affinity_strategy,
         protocol_hooks=protocol_hooks,
     )
 

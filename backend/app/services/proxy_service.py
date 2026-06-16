@@ -26,7 +26,7 @@ from app.common.stream_usage import StreamUsageAccumulator
 from app.common.time import utc_now
 from app.common.upstream_url import build_upstream_url
 from app.common.token_counter import get_token_counter
-from app.common.usage_extractor import extract_usage_details
+from app.common.usage_extractor import ensure_openai_usage_details, extract_usage_details
 from app.common.utils import generate_trace_id
 from app.domain.log import RequestLogCreate
 from app.domain.model import ModelMapping, ModelMappingProviderResponse
@@ -40,6 +40,7 @@ from app.services.retry_handler import AttemptRecord, RetryHandler
 from app.services.protocol_hooks import OPENAI_IMAGE_PATHS, ProtocolConversionHooks
 from app.services.strategy import (
     CostFirstStrategy,
+    PrefixAffinityStrategy,
     PriorityStrategy,
     RoundRobinStrategy,
     SelectionStrategy,
@@ -50,6 +51,55 @@ logger = logging.getLogger(__name__)
 MAX_LOG_TEXT_LENGTH = 10000
 MAX_USER_ID_LENGTH = 255
 CandidateKey = tuple[str, int] | tuple[str, int, str]
+
+# Prompt-cache observability. A request that carried a cache signal but came back with zero
+# cached tokens is only suspicious on a *repeat* of the same prefix within the cache TTL window —
+# a first request legitimately misses (cold). We track recently-seen prompt_cache_keys so the
+# WARN fires on a genuine repeat-miss (the signature of a broken/invalidated prefix), not on cold
+# starts. Process-local and best-effort; the authoritative signal is the per-request structured log.
+_CACHE_KEY_TTL_SECONDS = 600.0
+_recent_prompt_cache_keys: dict[str, float] = {}
+
+
+def _request_has_cache_signal(body: Any) -> bool:
+    """True if the request asked for prompt caching (OpenAI prompt_cache_key or Anthropic
+    cache_control on a system/message block)."""
+    if not isinstance(body, dict):
+        return False
+    pck = body.get("prompt_cache_key")
+    if isinstance(pck, str) and pck:
+        return True
+
+    def _has_cache_control(blocks: Any) -> bool:
+        return isinstance(blocks, list) and any(
+            isinstance(b, dict) and b.get("cache_control") for b in blocks
+        )
+
+    if _has_cache_control(body.get("system")):
+        return True
+    return any(
+        isinstance(m, dict) and _has_cache_control(m.get("content"))
+        for m in (body.get("messages") or [])
+    )
+
+
+def _note_and_check_repeat_miss(
+    prompt_cache_key: Optional[str], cache_hit: bool, now: float
+) -> bool:
+    """Record a prompt_cache_key sighting and report whether this is a repeat-miss.
+
+    Returns True only when the key was already seen within the TTL window AND this request did
+    not hit cache — i.e. a prefix that should be warm but isn't. First sight (cold) returns False.
+    Prunes expired keys on each call to stay bounded.
+    """
+    if not prompt_cache_key:
+        return False
+    expired = [k for k, t in _recent_prompt_cache_keys.items() if now - t > _CACHE_KEY_TTL_SECONDS]
+    for k in expired:
+        _recent_prompt_cache_keys.pop(k, None)
+    seen_recently = prompt_cache_key in _recent_prompt_cache_keys
+    _recent_prompt_cache_keys[prompt_cache_key] = now
+    return seen_recently and not cache_hit
 
 
 def _truncate_log_text(text: str) -> str:
@@ -151,6 +201,7 @@ class ProxyService:
         round_robin_strategy: Optional[SelectionStrategy] = None,
         cost_first_strategy: Optional[SelectionStrategy] = None,
         priority_strategy: Optional[SelectionStrategy] = None,
+        prefix_affinity_strategy: Optional[SelectionStrategy] = None,
         protocol_hooks: Optional[ProtocolConversionHooks] = None,
     ):
         """
@@ -172,6 +223,9 @@ class ProxyService:
         self._round_robin_strategy = round_robin_strategy or RoundRobinStrategy()
         self._cost_first_strategy = cost_first_strategy or CostFirstStrategy()
         self._priority_strategy = priority_strategy or PriorityStrategy()
+        self._prefix_affinity_strategy = (
+            prefix_affinity_strategy or PrefixAffinityStrategy()
+        )
         self._protocol_hooks = protocol_hooks or ProtocolConversionHooks()
 
     async def _write_log(self, log_data: RequestLogCreate) -> None:
@@ -191,6 +245,8 @@ class ProxyService:
             return self._cost_first_strategy
         if strategy_name == "priority":
             return self._priority_strategy
+        if strategy_name == "prefix_affinity":
+            return self._prefix_affinity_strategy
         else:
             # Default to round_robin for unknown strategies
             return self._round_robin_strategy
@@ -681,6 +737,9 @@ class ProxyService:
             forward_fn=forward_fn,
             input_tokens=input_tokens,
             image_count=image_count,
+            # Pin a stable prefix (the client's prompt_cache_key) to one backend so a repeated
+            # prefix reuses that backend's warm cache; only the prefix_affinity strategy reads it.
+            affinity_key=body.get("prompt_cache_key") if isinstance(body, dict) else None,
             on_failure_attempt=log_failed_attempt,
         )
 
@@ -739,6 +798,10 @@ class ProxyService:
                     )
                     if hooked_image_response_body is not None:
                         response_body = hooked_image_response_body
+                if normalize_protocol(request_protocol) == "openai" and not is_image_path:
+                    ensure_openai_usage_details(
+                        response_body, conversion_data["upstream_response_body"]
+                    )
                 result.response.body = response_body
             except Exception as e:
                 error_msg = str(e)
@@ -856,6 +919,33 @@ class ProxyService:
                 usage_details.get("cached_tokens")
                 or usage_details.get("cache_read_input_tokens")
             )
+
+        # Cache-effectiveness observability: a structured outcome line on every request (queryable
+        # for hit-rate metrics) plus a loud WARN on a repeat-miss — a prompt_cache_key seen again
+        # within the TTL that still returns zero cached tokens, i.e. a prefix that should be warm.
+        # Never breaks the response path.
+        try:
+            cache_hit = bool(cached_input_tokens)
+            logger.info(
+                "cache outcome model=%s cached_tokens=%s input_tokens=%s hit=%s had_signal=%s",
+                requested_model,
+                cached_input_tokens or 0,
+                input_tokens or 0,
+                cache_hit,
+                _request_has_cache_signal(body),
+            )
+            pck = body.get("prompt_cache_key") if isinstance(body, dict) else None
+            if _note_and_check_repeat_miss(pck, cache_hit, time.monotonic()):
+                logger.warning(
+                    "prompt cache repeat-miss model=%s prompt_cache_key=%s input_tokens=%s — "
+                    "prefix may be unstable, below the cacheable token floor, or routed to a cold "
+                    "backend (check prefix stability and routing affinity)",
+                    requested_model,
+                    pck,
+                    input_tokens or 0,
+                )
+        except Exception:
+            pass
         cost = calculate_cost_from_billing(
             billing=billing,
             input_tokens=input_tokens,
@@ -1345,6 +1435,8 @@ class ProxyService:
             forward_stream_fn,
             input_tokens=input_tokens,
             image_count=image_count,
+            # See non-streaming path: pins a stable prefix to one backend for cache reuse.
+            affinity_key=body.get("prompt_cache_key") if isinstance(body, dict) else None,
             on_failure_attempt=log_failed_attempt,
         )
 

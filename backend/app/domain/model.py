@@ -12,7 +12,7 @@ from typing_extensions import Literal
 
 
 BillingMode = Literal["token_flat", "token_tiered", "per_request", "per_image", "inherit_model_default"]
-SelectionStrategyType = Literal["round_robin", "cost_first", "priority"]
+SelectionStrategyType = Literal["round_robin", "cost_first", "priority", "prefix_affinity"]
 ModelType = Literal["chat", "speech", "transcription", "embedding", "images"]
 
 

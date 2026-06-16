@@ -1,4 +1,8 @@
-from app.common.usage_extractor import extract_output_tokens, extract_usage_details
+from app.common.usage_extractor import (
+    ensure_openai_usage_details,
+    extract_output_tokens,
+    extract_usage_details,
+)
 
 
 def test_extract_usage_details_openai_prompt_completion():
@@ -123,3 +127,45 @@ def test_extract_usage_details_gemini_multimodal_input():
 def test_extract_output_tokens_fallback_total_minus_input():
     body = {"usage": {"total_tokens": 20, "prompt_tokens": 12}}
     assert extract_output_tokens(body) == 8
+
+
+def test_ensure_openai_usage_details_reattaches_cached_tokens_from_responses_upstream():
+    # Responses-API upstream carries cache info under input_tokens_details; the converted
+    # chat response lost it down to the flat trio. The detail sub-object must be restored.
+    upstream = {
+        "usage": {
+            "input_tokens": 2707,
+            "output_tokens": 5,
+            "input_tokens_details": {"cached_tokens": 2304},
+            "output_tokens_details": {"reasoning_tokens": 3},
+        }
+    }
+    response = {"usage": {"prompt_tokens": 2707, "completion_tokens": 5, "total_tokens": 2712}}
+
+    ensure_openai_usage_details(response, upstream)
+
+    assert response["usage"]["prompt_tokens_details"] == {"cached_tokens": 2304}
+    assert response["usage"]["completion_tokens_details"] == {"reasoning_tokens": 3}
+
+
+def test_ensure_openai_usage_details_preserves_existing_details():
+    # Same-protocol verbatim responses already carry richer details — never downgrade them.
+    rich = {"cached_tokens": 2304, "audio_tokens": 0}
+    response = {
+        "usage": {
+            "prompt_tokens": 2707,
+            "completion_tokens": 5,
+            "total_tokens": 2712,
+            "prompt_tokens_details": rich,
+        }
+    }
+
+    ensure_openai_usage_details(response, {"usage": {"input_tokens_details": {"cached_tokens": 1}}})
+
+    assert response["usage"]["prompt_tokens_details"] is rich
+
+
+def test_ensure_openai_usage_details_noop_without_usage():
+    response = {"choices": []}
+    ensure_openai_usage_details(response, {"usage": {"prompt_tokens_details": {"cached_tokens": 9}}})
+    assert "usage" not in response

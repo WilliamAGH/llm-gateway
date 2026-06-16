@@ -7,6 +7,7 @@ Provides implementation for provider selection strategies.
 from abc import ABC, abstractmethod
 from typing import Optional
 import asyncio
+import hashlib
 import logging
 from decimal import Decimal
 
@@ -36,6 +37,7 @@ class SelectionStrategy(ABC):
         requested_model: str,
         input_tokens: Optional[int] = None,
         image_count: Optional[int] = None,
+        affinity_key: Optional[str] = None,
     ) -> Optional[CandidateProvider]:
         """
         Select a provider from the candidate list
@@ -59,6 +61,7 @@ class SelectionStrategy(ABC):
         current: CandidateProvider,
         input_tokens: Optional[int] = None,
         image_count: Optional[int] = None,
+        affinity_key: Optional[str] = None,
     ) -> Optional[CandidateProvider]:
         """
         Get next provider (used for failover)
@@ -104,6 +107,7 @@ class RoundRobinStrategy(SelectionStrategy):
         requested_model: str,
         input_tokens: Optional[int] = None,
         image_count: Optional[int] = None,
+        affinity_key: Optional[str] = None,
     ) -> Optional[CandidateProvider]:
         """
         Round-robin provider selection
@@ -163,6 +167,7 @@ class RoundRobinStrategy(SelectionStrategy):
         current: CandidateProvider,
         input_tokens: Optional[int] = None,
         image_count: Optional[int] = None,
+        affinity_key: Optional[str] = None,
     ) -> Optional[CandidateProvider]:
         """
         Get next provider (used for failover)
@@ -296,6 +301,7 @@ class PriorityStrategy(SelectionStrategy):
         requested_model: str,
         input_tokens: Optional[int] = None,
         image_count: Optional[int] = None,
+        affinity_key: Optional[str] = None,
     ) -> Optional[CandidateProvider]:
         """
         Select provider by priority with round robin within same priority
@@ -323,6 +329,7 @@ class PriorityStrategy(SelectionStrategy):
         current: CandidateProvider,
         input_tokens: Optional[int] = None,
         image_count: Optional[int] = None,
+        affinity_key: Optional[str] = None,
     ) -> Optional[CandidateProvider]:
         """
         Get next provider by priority (used for failover)
@@ -449,6 +456,7 @@ class CostFirstStrategy(SelectionStrategy):
         requested_model: str,
         input_tokens: Optional[int] = None,
         image_count: Optional[int] = None,
+        affinity_key: Optional[str] = None,
     ) -> Optional[CandidateProvider]:
         """
         Select provider with lowest cost
@@ -537,6 +545,7 @@ class CostFirstStrategy(SelectionStrategy):
         current: CandidateProvider,
         input_tokens: Optional[int] = None,
         image_count: Optional[int] = None,
+        affinity_key: Optional[str] = None,
     ) -> Optional[CandidateProvider]:
         """
         Get next provider by cost (used for failover)
@@ -620,3 +629,90 @@ class CostFirstStrategy(SelectionStrategy):
         )
 
         return next_candidate
+
+
+class PrefixAffinityStrategy(SelectionStrategy):
+    """
+    Prefix Affinity Strategy
+
+    Pins requests that share a stable prefix key (the request's ``prompt_cache_key``) to the same
+    backend via consistent hashing, so a repeated prompt prefix reuses a warm prompt/KV cache on
+    that backend instead of being scattered round-robin across the fleet. A candidate's share of
+    the hash space is proportional to its weight. Falls back to round-robin when no affinity key is
+    supplied (e.g. requests that don't set ``prompt_cache_key``), so behavior is unchanged for them.
+
+    Selection is stateless and deterministic: the same key + same candidate set always resolves to
+    the same provider, with no shared counters to lock.
+    """
+
+    def __init__(self):
+        """Initialize Strategy"""
+        # Used only as the no-affinity-key fallback.
+        self._round_robin = RoundRobinStrategy()
+
+    @staticmethod
+    def _sorted(candidates: list[CandidateProvider]) -> list[CandidateProvider]:
+        # Stable ordering independent of candidate list order, so the hash maps consistently.
+        return sorted(candidates, key=_candidate_key)
+
+    @staticmethod
+    def _bucket(affinity_key: str, total: int) -> int:
+        digest = hashlib.sha256(affinity_key.encode("utf-8")).hexdigest()
+        return int(digest, 16) % total
+
+    async def select(
+        self,
+        candidates: list[CandidateProvider],
+        requested_model: str,
+        input_tokens: Optional[int] = None,
+        image_count: Optional[int] = None,
+        affinity_key: Optional[str] = None,
+    ) -> Optional[CandidateProvider]:
+        """Deterministically map ``affinity_key`` to one weighted candidate."""
+        if not candidates:
+            return None
+
+        # No stable key to pin on — preserve round-robin distribution.
+        if not affinity_key:
+            return await self._round_robin.select(
+                candidates, requested_model, input_tokens, image_count
+            )
+
+        ordered = self._sorted(candidates)
+        total_weight = sum(c.weight for c in ordered)
+        if total_weight <= 0:
+            return ordered[self._bucket(affinity_key, len(ordered))]
+
+        target = self._bucket(affinity_key, total_weight)
+        cumulative = 0
+        for candidate in ordered:
+            cumulative += candidate.weight
+            if target < cumulative:
+                return candidate
+        return ordered[0]
+
+    async def get_next(
+        self,
+        candidates: list[CandidateProvider],
+        requested_model: str,
+        current: CandidateProvider,
+        input_tokens: Optional[int] = None,
+        image_count: Optional[int] = None,
+        affinity_key: Optional[str] = None,
+    ) -> Optional[CandidateProvider]:
+        """Deterministic failover: the next candidate in stable order after ``current``."""
+        if not candidates or len(candidates) <= 1:
+            return None
+
+        ordered = self._sorted(candidates)
+        current_index = next(
+            (i for i, c in enumerate(ordered) if _candidate_key(c) == _candidate_key(current)),
+            -1,
+        )
+        if current_index == -1:
+            return None
+
+        next_index = (current_index + 1) % len(ordered)
+        if next_index == current_index:
+            return None
+        return ordered[next_index]

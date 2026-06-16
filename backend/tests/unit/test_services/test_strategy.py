@@ -795,3 +795,85 @@ class TestCostFirstModelBillingFallback:
         # image_count=10: Cheap = $0.01*10 = $0.10, Expensive = $0.05*10 = $0.50
         selected = await self.strategy.select(candidates, "dall-e-3", input_tokens=1, image_count=10)
         assert selected.provider_id == 1
+
+
+class TestPrefixAffinityStrategy:
+    """Prefix Affinity Strategy Tests"""
+
+    def setup_method(self):
+        from app.services.strategy import PrefixAffinityStrategy
+
+        self.strategy = PrefixAffinityStrategy()
+        self.candidates = [
+            CandidateProvider(
+                provider_id=i,
+                provider_name=f"Provider{i}",
+                base_url=f"https://api{i}.com",
+                protocol="openai",
+                api_key=f"key{i}",
+                target_model=f"model{i}",
+                priority=1,
+                weight=1,
+            )
+            for i in (1, 2, 3, 4, 5)
+        ]
+
+    @pytest.mark.asyncio
+    async def test_same_key_pins_to_same_provider(self):
+        """The same affinity key always resolves to the same backend."""
+        first = await self.strategy.select(self.candidates, "m", affinity_key="prefix-A")
+        for _ in range(10):
+            again = await self.strategy.select(self.candidates, "m", affinity_key="prefix-A")
+            assert again.provider_id == first.provider_id
+
+    @pytest.mark.asyncio
+    async def test_selection_is_order_independent(self):
+        """Shuffling the candidate list must not change which backend a key maps to."""
+        import random
+
+        baseline = await self.strategy.select(self.candidates, "m", affinity_key="prefix-A")
+        shuffled = list(self.candidates)
+        random.Random(7).shuffle(shuffled)
+        assert shuffled != self.candidates
+        picked = await self.strategy.select(shuffled, "m", affinity_key="prefix-A")
+        assert picked.provider_id == baseline.provider_id
+
+    @pytest.mark.asyncio
+    async def test_distinct_keys_spread_across_backends(self):
+        """Different keys should not all collapse onto one backend."""
+        seen = {
+            (await self.strategy.select(self.candidates, "m", affinity_key=f"prefix-{i}")).provider_id
+            for i in range(50)
+        }
+        assert len(seen) > 1
+
+    @pytest.mark.asyncio
+    async def test_no_key_falls_back_to_round_robin(self):
+        """Without an affinity key, distribution matches round-robin (cycles through backends)."""
+        picks = [
+            (await self.strategy.select(self.candidates, "m")).provider_id
+            for _ in range(len(self.candidates))
+        ]
+        assert sorted(picks) == [c.provider_id for c in self.candidates]
+
+    @pytest.mark.asyncio
+    async def test_get_next_returns_a_different_provider(self):
+        """Failover yields a distinct backend, deterministically."""
+        current = await self.strategy.select(self.candidates, "m", affinity_key="prefix-A")
+        nxt = await self.strategy.get_next(
+            self.candidates, "m", current, affinity_key="prefix-A"
+        )
+        assert nxt is not None
+        assert nxt.provider_id != current.provider_id
+
+    @pytest.mark.asyncio
+    async def test_weight_zero_falls_back_to_equal_hashing(self):
+        """Zero/invalid total weight must not divide-by-zero; it hashes over count."""
+        for c in self.candidates:
+            c.weight = 0
+        selected = await self.strategy.select(self.candidates, "m", affinity_key="prefix-A")
+        assert selected is not None
+
+    @pytest.mark.asyncio
+    async def test_empty_candidates(self):
+        assert await self.strategy.select([], "m", affinity_key="prefix-A") is None

@@ -8,7 +8,7 @@ from app.services.model_service import ModelService
 from app.services.api_key_service import ApiKeyService
 from app.services.log_service import LogService
 from app.services.retry_handler import RetryHandler
-from app.services.strategy import SelectionStrategy, RoundRobinStrategy, CostFirstStrategy, PriorityStrategy
+from app.services.strategy import SelectionStrategy, RoundRobinStrategy, CostFirstStrategy, PriorityStrategy, PrefixAffinityStrategy
 
 __all__ = [
     "ProxyService",
@@ -21,4 +21,5 @@ __all__ = [
     "RoundRobinStrategy",
     "CostFirstStrategy",
     "PriorityStrategy",
+    "PrefixAffinityStrategy",
 ]

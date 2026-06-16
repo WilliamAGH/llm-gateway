@@ -77,6 +77,9 @@ class IRTextBlock:
     type: ContentBlockType = field(default=ContentBlockType.TEXT, init=False)
     text: str = ""
     citations: Optional[List[Dict[str, Any]]] = None
+    # Prompt-cache breakpoint (e.g. Anthropic's {"type": "ephemeral"}). Carried verbatim so it
+    # survives the IR round-trip instead of being silently dropped on cross-protocol conversion.
+    cache_control: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -88,6 +91,7 @@ class IRImageBlock:
     base64_data: Optional[str] = None
     media_type: Optional[str] = None  # e.g., "image/jpeg", "image/png"
     detail: Optional[str] = None  # OpenAI-specific: "auto", "low", "high"
+    cache_control: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -110,6 +114,7 @@ class IRDocumentBlock:
     media_type: Optional[str] = None  # e.g., "application/pdf"
     title: Optional[str] = None
     context: Optional[str] = None
+    cache_control: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -121,6 +126,7 @@ class IRToolUseBlock:
     input: Dict[str, Any] = field(default_factory=dict)
     # For streaming: partial arguments as string
     partial_arguments: Optional[str] = None
+    cache_control: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -130,6 +136,7 @@ class IRToolResultBlock:
     tool_use_id: str = ""
     content: Union[str, List["IRContentBlock"]] = ""
     is_error: bool = False
+    cache_control: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -182,6 +189,7 @@ class IRToolDeclaration:
     description: Optional[str] = None
     parameters: Dict[str, Any] = field(default_factory=dict)  # JSON Schema
     strict: bool = False  # OpenAI's strict mode
+    cache_control: Optional[Dict[str, Any]] = None
 
 
 @dataclass

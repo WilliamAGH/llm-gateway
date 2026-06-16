@@ -186,11 +186,14 @@ class AnthropicMessagesDecoder:
     def _decode_content_block(self, block: Dict[str, Any]) -> Optional[IRContentBlock]:
         """Decode a single content block."""
         block_type = block.get("type", "text")
+        # Preserve the prompt-cache breakpoint so it survives an IR round-trip.
+        cache_control = block.get("cache_control")
 
         if block_type == "text":
             return IRTextBlock(
                 text=block.get("text", ""),
                 citations=block.get("citations"),
+                cache_control=cache_control,
             )
 
         elif block_type == "image":
@@ -202,11 +205,13 @@ class AnthropicMessagesDecoder:
                     source_type=ImageSourceType.BASE64,
                     base64_data=source.get("data"),
                     media_type=source.get("media_type"),
+                    cache_control=cache_control,
                 )
             else:  # url
                 return IRImageBlock(
                     source_type=ImageSourceType.URL,
                     url=source.get("url"),
+                    cache_control=cache_control,
                 )
 
         elif block_type == "document":
@@ -218,6 +223,7 @@ class AnthropicMessagesDecoder:
                 media_type=source.get("media_type"),
                 title=block.get("title"),
                 context=block.get("context"),
+                cache_control=cache_control,
             )
 
         elif block_type == "tool_use":
@@ -225,6 +231,7 @@ class AnthropicMessagesDecoder:
                 id=block.get("id", ""),
                 name=block.get("name", ""),
                 input=block.get("input", {}),
+                cache_control=cache_control,
             )
 
         elif block_type == "tool_result":
@@ -235,6 +242,7 @@ class AnthropicMessagesDecoder:
                 if isinstance(content, str)
                 else self._decode_tool_result_content(content),
                 is_error=block.get("is_error", False),
+                cache_control=cache_control,
             )
 
         elif block_type == "thinking":
@@ -649,8 +657,13 @@ class AnthropicMessagesEncoder:
             if encoded:
                 content.append(encoded)
 
-        # Simplify single text block to string
-        if len(content) == 1 and content[0].get("type") == "text":
+        # Simplify single text block to string — but not when it carries a cache breakpoint,
+        # which Anthropic only honors on the structured block form.
+        if (
+            len(content) == 1
+            and content[0].get("type") == "text"
+            and "cache_control" not in content[0]
+        ):
             message["content"] = content[0]["text"]
         elif content:
             message["content"] = content
@@ -660,6 +673,17 @@ class AnthropicMessagesEncoder:
         return message
 
     def _encode_content_block(self, block: IRContentBlock) -> Optional[Dict[str, Any]]:
+        """Encode a content block to Anthropic format, re-attaching any cache breakpoint."""
+        encoded = self._encode_content_block_inner(block)
+        if encoded is not None:
+            cache_control = getattr(block, "cache_control", None)
+            if cache_control:
+                encoded["cache_control"] = cache_control
+        return encoded
+
+    def _encode_content_block_inner(
+        self, block: IRContentBlock
+    ) -> Optional[Dict[str, Any]]:
         """Encode a content block to Anthropic format."""
         if isinstance(block, IRTextBlock):
             return {"type": "text", "text": block.text}
@@ -754,6 +778,8 @@ class AnthropicMessagesEncoder:
             }
             if tool.description:
                 encoded["description"] = tool.description
+            if tool.cache_control:
+                encoded["cache_control"] = tool.cache_control
             result.append(encoded)
         return result
 

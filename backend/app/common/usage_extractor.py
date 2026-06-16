@@ -237,6 +237,57 @@ def extract_usage_details(body: Any) -> Optional[UsageDetails]:
     return _normalize_usage(usage, usage_kind)
 
 
+def _openai_prompt_tokens_details(details: UsageDetails) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    if details.cached_tokens is not None:
+        out["cached_tokens"] = details.cached_tokens
+    if details.input_audio_tokens is not None:
+        out["audio_tokens"] = details.input_audio_tokens
+    return out
+
+
+def _openai_completion_tokens_details(details: UsageDetails) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    if details.reasoning_tokens is not None:
+        out["reasoning_tokens"] = details.reasoning_tokens
+    if details.output_audio_tokens is not None:
+        out["audio_tokens"] = details.output_audio_tokens
+    return out
+
+
+def ensure_openai_usage_details(response_body: Any, upstream_body: Any) -> None:
+    """
+    Re-attach OpenAI usage detail sub-objects to an OpenAI Chat Completions client response.
+
+    When a request is served from a non-chat upstream (e.g. the OpenAI Responses API) the
+    response conversion rebuilds usage as the flat {prompt_tokens, completion_tokens,
+    total_tokens} trio and drops prompt_tokens_details / completion_tokens_details — which
+    erases prompt-cache observability (cached_tokens) for every chat client. This reconstructs
+    those sub-objects from the captured upstream usage and merges them in.
+
+    Mutates response_body["usage"] in place and only ADDS missing keys, so a same-protocol
+    verbatim response that already carries richer details is left untouched.
+    """
+    if not isinstance(response_body, dict):
+        return
+    usage = response_body.get("usage")
+    if not isinstance(usage, dict):
+        return
+
+    details = extract_usage_details(upstream_body) or extract_usage_details(response_body)
+    if details is None:
+        return
+
+    if "prompt_tokens_details" not in usage:
+        prompt_details = _openai_prompt_tokens_details(details)
+        if prompt_details:
+            usage["prompt_tokens_details"] = prompt_details
+    if "completion_tokens_details" not in usage:
+        completion_details = _openai_completion_tokens_details(details)
+        if completion_details:
+            usage["completion_tokens_details"] = completion_details
+
+
 def extract_output_tokens(body: Any) -> Optional[int]:
     """
     Extract output token count from a response body.
