@@ -36,8 +36,11 @@ class Settings(BaseSettings):
     RETRY_DELAY_MS: int = 1000
 
     # HTTP Client Config
-    # Request timeout (seconds) — the whole-generation read budget.
-    HTTP_TIMEOUT: int = 1800
+    # Request timeout (seconds) — the whole-generation read budget. Raised to 2h so
+    # long batch-tier generations (the harness's agentic enrich turns) are never cut
+    # at the provider edge; streaming stall guards below still fail a silent upstream
+    # fast, and connect/write/pool stay tight in build_http_timeout().
+    HTTP_TIMEOUT: int = 7200
     # Streaming stall detection (seconds). A provider that returns headers but no
     # first token, or stops mid-stream, is surfaced as a 504 and failed over
     # instead of occupying a slot for the full HTTP_TIMEOUT budget.
