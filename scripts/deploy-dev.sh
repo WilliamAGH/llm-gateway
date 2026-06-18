@@ -57,19 +57,22 @@ for _ in $(seq 1 40); do
   sleep 15
 done
 
-# 5. Smoke test: a real chat call per protocol proves the image is live AND the
-#    provider keys still decrypt after the Squirrel recreate. max_completion_tokens
-#    must be >= 16 (the OpenAI Responses API rejects anything lower).
+# 5. Smoke test: real calls prove the image is live AND the provider keys still
+#    decrypt after the Squirrel recreate. max_completion_tokens must be >= 16
+#    (the OpenAI Responses API rejects anything lower). The Anthropic-compatible
+#    GPT smoke covers the harness path where metadata.user_id translates to the
+#    OpenAI Responses user field.
 KEY="$(doppler run -p back-end -c staging -- printenv LLM_API_KEY)"
 KEY="$KEY" python3 - "$SHA" <<'PY'
 import json, os, sys, urllib.request, urllib.error
 key = os.environ["KEY"]; sha = sys.argv[1]
-url = "https://api.llm-gateway.iocloudhost.net/v1/chat/completions"
+chat_url = "https://api.llm-gateway.iocloudhost.net/v1/chat/completions"
+messages_url = "https://api.llm-gateway.iocloudhost.net/v1/messages?beta=true"
 ok = True
 for model in ("gpt-5.4", "claude-opus-4-7"):
     body = {"model": model, "messages": [{"role": "user", "content": "Reply OK"}],
             "max_completion_tokens": 16}
-    req = urllib.request.Request(url, data=json.dumps(body).encode(),
+    req = urllib.request.Request(chat_url, data=json.dumps(body).encode(),
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=40) as r:
@@ -80,6 +83,29 @@ for model in ("gpt-5.4", "claude-opus-4-7"):
     except urllib.error.HTTPError as e:
         print(f"  smoke {model}: HTTP {e.code} {e.read().decode()[:80]}")
         ok = False
+
+body = {
+    "model": "gpt-5.4",
+    "messages": [{"role": "user", "content": "Reply OK"}],
+    "max_tokens": 16,
+    "metadata": {"user_id": "u" * 150},
+}
+req = urllib.request.Request(messages_url, data=json.dumps(body).encode(), headers={
+    "Authorization": f"Bearer {key}",
+    "Content-Type": "application/json",
+    "anthropic-version": "2023-06-01",
+})
+try:
+    with urllib.request.urlopen(req, timeout=40) as r:
+        d = json.load(r)
+        content = d.get("content") or []
+        text = content[0].get("text") if content and isinstance(content[0], dict) else None
+        print(f"  smoke gpt-5.4 messages long-user: {r.status} {text!r}")
+        ok = ok and r.status == 200 and bool(text)
+except urllib.error.HTTPError as e:
+    print(f"  smoke gpt-5.4 messages long-user: HTTP {e.code} {e.read().decode()[:120]}")
+    ok = False
+
 sys.exit(0 if ok else 1)
 PY
 
