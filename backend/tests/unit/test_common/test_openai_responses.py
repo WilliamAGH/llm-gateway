@@ -77,6 +77,20 @@ def test_chat_completions_request_to_responses_preserves_reasoning():
     assert "output_config" not in responses
 
 
+def test_chat_completions_request_to_responses_preserves_prompt_cache_fields():
+    responses = chat_completions_request_to_responses(
+        {
+            "model": "gpt-5-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "prompt_cache_key": "session-prefix",
+            "prompt_cache_retention": "24h",
+        }
+    )
+
+    assert responses["prompt_cache_key"] == "session-prefix"
+    assert responses["prompt_cache_retention"] == "24h"
+
+
 def test_responses_request_to_chat_completions_preserves_reasoning():
     chat = responses_request_to_chat_completions(
         {
@@ -89,6 +103,20 @@ def test_responses_request_to_chat_completions_preserves_reasoning():
     assert chat["reasoning"] == {"effort": "xhigh"}
     assert "thinking" not in chat
     assert "output_config" not in chat
+
+
+def test_responses_request_to_chat_completions_preserves_prompt_cache_fields():
+    chat = responses_request_to_chat_completions(
+        {
+            "model": "gpt-5-mini",
+            "input": "hello",
+            "prompt_cache_key": "session-prefix",
+            "prompt_cache_retention": "24h",
+        }
+    )
+
+    assert chat["prompt_cache_key"] == "session-prefix"
+    assert chat["prompt_cache_retention"] == "24h"
 
 
 def test_responses_request_to_chat_completions_maps_anthropic_reasoning_fields():

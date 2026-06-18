@@ -123,6 +123,8 @@ def chat_completions_request_to_responses(body: dict[str, Any]) -> dict[str, Any
         "top_logprobs",
         "user",
         "metadata",
+        "prompt_cache_key",
+        "prompt_cache_retention",
         "reasoning",
     )
     for key in passthrough_keys:
@@ -300,6 +302,8 @@ def responses_request_to_chat_completions(body: dict[str, Any]) -> dict[str, Any
         "top_logprobs",
         "user",
         "metadata",
+        "prompt_cache_key",
+        "prompt_cache_retention",
         "reasoning",
         "max_tokens",
         "max_completion_tokens",
