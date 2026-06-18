@@ -120,16 +120,17 @@ def _body_with_prompt_cache_key(body: Any, prompt_cache_key: Optional[str]) -> A
 
 
 def _supplier_body_with_prompt_cache_key(
-    body: dict[str, Any],
+    body: Any,
     prompt_cache_key: Optional[str],
     *,
     requested_model: str,
     target_model: str,
     base_url: str,
     supplier_protocol: Optional[str],
-) -> dict[str, Any]:
+) -> Any:
     if (
         not prompt_cache_key
+        or not isinstance(body, dict)
         or _non_empty_prompt_cache_key(body)
         or supplier_protocol != "openai"
         or not _is_kimi_prompt_cache_target(requested_model, target_model, base_url)
@@ -577,6 +578,12 @@ class ProxyService:
             headers=headers,
             body=body,
         )
+        prompt_cache_key = _prompt_cache_key_for_request(
+            body,
+            requested_model,
+            [candidate.target_model for candidate in candidates],
+        )
+        cache_signal_body = _body_with_prompt_cache_key(body, prompt_cache_key)
         token_counter = get_token_counter(protocol)
 
         # Extract image count for per-image billing
@@ -723,12 +730,12 @@ class ProxyService:
                     candidate.provider_options
                 )
                 hooked_body = await self._protocol_hooks.before_request_conversion(
-                    body,
+                    cache_signal_body,
                     request_protocol,
                     supplier_protocol,
                 )
                 if hooked_body is None:
-                    hooked_body = body
+                    hooked_body = cache_signal_body
                 if is_image_path:
                     hooked_image_body = (
                         await self._protocol_hooks.before_image_request_conversion(
@@ -757,6 +764,14 @@ class ProxyService:
                 )
                 if hooked_supplier_body is not None:
                     supplier_body = hooked_supplier_body
+                supplier_body = _supplier_body_with_prompt_cache_key(
+                    supplier_body,
+                    prompt_cache_key,
+                    requested_model=requested_model,
+                    target_model=candidate.target_model,
+                    base_url=candidate.base_url,
+                    supplier_protocol=supplier_protocol,
+                )
                 if is_image_path:
                     hooked_image_supplier_body = (
                         await self._protocol_hooks.after_image_request_conversion(
@@ -814,9 +829,9 @@ class ProxyService:
             forward_fn=forward_fn,
             input_tokens=input_tokens,
             image_count=image_count,
-            # Pin a stable prefix (the client's prompt_cache_key) to one backend so a repeated
-            # prefix reuses that backend's warm cache; only the prefix_affinity strategy reads it.
-            affinity_key=body.get("prompt_cache_key") if isinstance(body, dict) else None,
+            # Pin a stable prefix to one backend so a repeated prefix reuses that backend's warm
+            # cache; only the prefix_affinity strategy reads it.
+            affinity_key=prompt_cache_key,
             on_failure_attempt=log_failed_attempt,
         )
 
@@ -1009,16 +1024,17 @@ class ProxyService:
                 cached_input_tokens or 0,
                 input_tokens or 0,
                 cache_hit,
-                _request_has_cache_signal(body),
+                _request_has_cache_signal(cache_signal_body),
             )
-            pck = body.get("prompt_cache_key") if isinstance(body, dict) else None
-            if _note_and_check_repeat_miss(pck, cache_hit, time.monotonic()):
+            if _note_and_check_repeat_miss(
+                prompt_cache_key, cache_hit, time.monotonic()
+            ):
                 logger.warning(
                     "prompt cache repeat-miss model=%s prompt_cache_key=%s input_tokens=%s — "
                     "prefix may be unstable, below the cacheable token floor, or routed to a cold "
                     "backend (check prefix stability and routing affinity)",
                     requested_model,
-                    pck,
+                    prompt_cache_key,
                     input_tokens or 0,
                 )
         except Exception:
@@ -1150,6 +1166,12 @@ class ProxyService:
             headers=headers,
             body=body,
         )
+        prompt_cache_key = _prompt_cache_key_for_request(
+            body,
+            requested_model,
+            [candidate.target_model for candidate in candidates],
+        )
+        cache_signal_body = _body_with_prompt_cache_key(body, prompt_cache_key)
 
         # Extract image count for per-image billing
         image_count: Optional[int] = None
@@ -1199,12 +1221,12 @@ class ProxyService:
                     candidate.provider_options
                 )
                 hooked_body = await self._protocol_hooks.before_request_conversion(
-                    body,
+                    cache_signal_body,
                     request_protocol,
                     supplier_protocol,
                 )
                 if hooked_body is None:
-                    hooked_body = body
+                    hooked_body = cache_signal_body
                 if is_image_path:
                     hooked_image_body = (
                         await self._protocol_hooks.before_image_request_conversion(
@@ -1231,6 +1253,14 @@ class ProxyService:
                 )
                 if hooked_supplier_body is not None:
                     supplier_body = hooked_supplier_body
+                supplier_body = _supplier_body_with_prompt_cache_key(
+                    supplier_body,
+                    prompt_cache_key,
+                    requested_model=requested_model,
+                    target_model=candidate.target_model,
+                    base_url=candidate.base_url,
+                    supplier_protocol=supplier_protocol,
+                )
                 if is_image_path:
                     hooked_image_supplier_body = (
                         await self._protocol_hooks.after_image_request_conversion(
@@ -1513,7 +1543,7 @@ class ProxyService:
             input_tokens=input_tokens,
             image_count=image_count,
             # See non-streaming path: pins a stable prefix to one backend for cache reuse.
-            affinity_key=body.get("prompt_cache_key") if isinstance(body, dict) else None,
+            affinity_key=prompt_cache_key,
             on_failure_attempt=log_failed_attempt,
         )
 
