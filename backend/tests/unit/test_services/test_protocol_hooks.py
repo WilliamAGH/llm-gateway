@@ -10,6 +10,7 @@ from app.rules.models import CandidateProvider
 from app.domain.kv_store import KeyValueModel
 from app.services.protocol_hooks import ProtocolConversionHooks
 from app.services.proxy_service import ProxyService
+from app.services.strategy import SelectionStrategy
 
 
 class RecordingHooks(ProtocolConversionHooks):
@@ -32,6 +33,33 @@ class StreamHooks(ProtocolConversionHooks):
 
     async def after_stream_chunk_conversion(self, chunk, request_protocol, supplier_protocol):
         return chunk.replace(b"hi", b"hi!")
+
+
+class RecordingAffinityStrategy(SelectionStrategy):
+    def __init__(self):
+        self.affinity_keys: list[str | None] = []
+
+    async def select(
+        self,
+        candidates: list[CandidateProvider],
+        requested_model: str,
+        input_tokens: int | None = None,
+        image_count: int | None = None,
+        affinity_key: str | None = None,
+    ) -> CandidateProvider | None:
+        self.affinity_keys.append(affinity_key)
+        return candidates[0] if candidates else None
+
+    async def get_next(
+        self,
+        candidates: list[CandidateProvider],
+        requested_model: str,
+        current: CandidateProvider,
+        input_tokens: int | None = None,
+        image_count: int | None = None,
+        affinity_key: str | None = None,
+    ) -> CandidateProvider | None:
+        return None
 
 
 class ImageHooks(ProtocolConversionHooks):
@@ -217,6 +245,184 @@ async def test_protocol_hooks_apply_to_image_non_stream_flow():
         "image_after_response": {"converted_image_response": True},
         "path": "/v1/images/generations",
     }
+    service.log_repo.create.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_kimi_request_without_client_key_derives_prompt_cache_key_for_forwarding_and_affinity():
+    now = utc_now()
+    model_mapping = ModelMapping(
+        requested_model="researchly-code",
+        strategy="prefix_affinity",
+        matching_rules=None,
+        capabilities=None,
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    candidate = CandidateProvider(
+        provider_id=1,
+        provider_name="kimi-code-plan",
+        base_url="https://api.kimi.com/coding/v1",
+        protocol="openai",
+        api_key="sk-test",
+        target_model="kimi-for-coding",
+        priority=0,
+        weight=1,
+    )
+    affinity_strategy = RecordingAffinityStrategy()
+    service = ProxyService(
+        model_repo=AsyncMock(),
+        provider_repo=AsyncMock(),
+        log_repo=AsyncMock(),
+        prefix_affinity_strategy=affinity_strategy,
+        protocol_hooks=ProtocolConversionHooks(),
+    )
+    service._resolve_candidates = AsyncMock(
+        return_value=(model_mapping, [candidate], 2048, "openai", {})
+    )
+    captured: dict[str, dict] = {}
+    original_body = {
+        "model": "researchly-code",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    def fake_convert_request_for_supplier(*, body, **kwargs):
+        captured["conversion_body"] = body
+        return "/v1/chat/completions", {"converted": True}
+
+    async def forward(*, body: dict, **kwargs):
+        captured["forwarded_body"] = body
+        return ProviderResponse(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body={
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 2048,
+                    "completion_tokens": 1,
+                    "total_tokens": 2049,
+                    "cached_tokens": 0,
+                },
+            },
+        )
+
+    fake_client = AsyncMock()
+    fake_client.forward = AsyncMock(side_effect=forward)
+
+    with patch(
+        "app.services.proxy_service.convert_request_for_supplier",
+        side_effect=fake_convert_request_for_supplier,
+    ):
+        with patch(
+            "app.services.proxy_service.get_provider_client",
+            return_value=fake_client,
+        ):
+            await service.process_request(
+                api_key_id=1,
+                api_key_name="k",
+                request_protocol="openai",
+                path="/v1/chat/completions",
+                request_url="/v1/chat/completions",
+                method="POST",
+                headers={},
+                body=original_body,
+            )
+
+    prompt_cache_key = captured["forwarded_body"]["prompt_cache_key"]
+    assert prompt_cache_key.startswith("llmgw:kimi:")
+    assert captured["conversion_body"]["prompt_cache_key"] == prompt_cache_key
+    assert affinity_strategy.affinity_keys == [prompt_cache_key]
+    assert "prompt_cache_key" not in original_body
+    service.log_repo.create.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_kimi_stream_request_without_client_key_derives_prompt_cache_key_for_forwarding_and_affinity():
+    now = utc_now()
+    model_mapping = ModelMapping(
+        requested_model="researchly-code",
+        strategy="prefix_affinity",
+        matching_rules=None,
+        capabilities=None,
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+    candidate = CandidateProvider(
+        provider_id=1,
+        provider_name="kimi-code-plan",
+        base_url="https://api.kimi.com/coding/v1",
+        protocol="openai",
+        api_key="sk-test",
+        target_model="kimi-for-coding",
+        priority=0,
+        weight=1,
+    )
+    affinity_strategy = RecordingAffinityStrategy()
+    service = ProxyService(
+        model_repo=AsyncMock(),
+        provider_repo=AsyncMock(),
+        log_repo=AsyncMock(),
+        prefix_affinity_strategy=affinity_strategy,
+        protocol_hooks=ProtocolConversionHooks(),
+    )
+    service._resolve_candidates = AsyncMock(
+        return_value=(model_mapping, [candidate], 2048, "openai", {})
+    )
+    captured: dict[str, dict] = {}
+    original_body = {
+        "model": "researchly-code",
+        "stream": True,
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    def fake_convert_request_for_supplier(*, body, **kwargs):
+        captured["conversion_body"] = body
+        return "/v1/chat/completions", {"converted": True}
+
+    def forward_stream(**kwargs):
+        captured["forwarded_body"] = kwargs["body"]
+
+        async def gen():
+            response = ProviderResponse(status_code=200, headers={})
+            yield b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n', response
+
+        return gen()
+
+    fake_client = AsyncMock()
+    fake_client.forward_stream = forward_stream
+
+    with patch(
+        "app.services.proxy_service.convert_request_for_supplier",
+        side_effect=fake_convert_request_for_supplier,
+    ):
+        with patch(
+            "app.services.proxy_service.get_provider_client",
+            return_value=fake_client,
+        ):
+            initial_response, stream_gen, _ = await service.process_request_stream(
+                api_key_id=1,
+                api_key_name="k",
+                request_protocol="openai",
+                path="/v1/chat/completions",
+                request_url="/v1/chat/completions",
+                method="POST",
+                headers={},
+                body=original_body,
+            )
+
+    chunks = []
+    async for chunk in stream_gen:
+        chunks.append(chunk)
+
+    prompt_cache_key = captured["forwarded_body"]["prompt_cache_key"]
+    assert initial_response.status_code == 200
+    assert chunks == [b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n']
+    assert prompt_cache_key.startswith("llmgw:kimi:")
+    assert captured["conversion_body"]["prompt_cache_key"] == prompt_cache_key
+    assert affinity_strategy.affinity_keys == [prompt_cache_key]
+    assert "prompt_cache_key" not in original_body
     service.log_repo.create.assert_awaited()
 
 
