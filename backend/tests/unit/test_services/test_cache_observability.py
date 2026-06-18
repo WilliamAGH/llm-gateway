@@ -3,6 +3,7 @@
 import app.services.proxy_service as ps
 from app.services.proxy_service import (
     _body_with_prompt_cache_key,
+    _body_with_gateway_response_cache_usage,
     _exact_response_cache_allowed,
     _exact_response_cache_key,
     _note_and_check_repeat_miss,
@@ -247,6 +248,45 @@ class TestRepeatMissDetection:
 
 
 class TestExactResponseCache:
+    def test_gateway_cache_hit_marks_anthropic_usage_as_cache_read(self):
+        body = {
+            "type": "message",
+            "usage": {"input_tokens": 5282, "output_tokens": 5},
+        }
+
+        with_usage = _body_with_gateway_response_cache_usage(body, 5282)
+
+        assert with_usage["usage"]["cache_read_input_tokens"] == 5282
+        assert "cache_read_input_tokens" not in body["usage"]
+
+    def test_gateway_cache_hit_marks_openai_responses_usage_as_cached(self):
+        body = {
+            "object": "response",
+            "usage": {
+                "input_tokens": 5282,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens": 5,
+            },
+        }
+
+        with_usage = _body_with_gateway_response_cache_usage(body, 5282)
+
+        assert with_usage["usage"]["input_tokens_details"]["cached_tokens"] == 5282
+
+    def test_gateway_cache_hit_marks_openai_chat_usage_as_cached(self):
+        body = {
+            "object": "chat.completion",
+            "usage": {
+                "prompt_tokens": 5282,
+                "prompt_tokens_details": {"cached_tokens": 0},
+                "completion_tokens": 5,
+            },
+        }
+
+        with_usage = _body_with_gateway_response_cache_usage(body, 5282)
+
+        assert with_usage["usage"]["prompt_tokens_details"]["cached_tokens"] == 5282
+
     def test_allows_long_cross_protocol_gpt_responses_request(self):
         assert _exact_response_cache_allowed(
             request_protocol="anthropic",

@@ -656,7 +656,13 @@ async def test_gpt5_messages_exact_repeat_uses_gateway_response_cache():
                 )
 
     assert fake_client.forward.await_count == 1
-    assert first_response.body == second_response.body
+    assert {
+        key: value for key, value in first_response.body.items() if key != "usage"
+    } == {
+        key: value for key, value in second_response.body.items() if key != "usage"
+    }
+    assert first_response.body["usage"]["input_tokens_details"]["cached_tokens"] == 0
+    assert second_response.body["usage"]["input_tokens_details"]["cached_tokens"] == 2048
     assert second_response.headers["x-llm-gateway-response-cache"] == "hit"
     second_log = service.log_repo.create.await_args_list[-1].args[0]
     assert second_log.usage_details["source"] == "gateway_response_cache"

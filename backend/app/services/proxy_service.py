@@ -281,6 +281,38 @@ def _provider_response_from_exact_cache(value: str, elapsed_ms: int) -> Optional
     )
 
 
+def _body_with_gateway_response_cache_usage(
+    body: Any, input_tokens: Optional[int]
+) -> Any:
+    cached_tokens = int(input_tokens or 0)
+    if cached_tokens <= 0 or not isinstance(body, dict):
+        return body
+    usage = body.get("usage")
+    if not isinstance(usage, dict):
+        return body
+
+    updated_body = dict(body)
+    updated_usage = dict(usage)
+    if "prompt_tokens" in updated_usage:
+        details = updated_usage.get("prompt_tokens_details")
+        updated_usage["prompt_tokens_details"] = {
+            **(details if isinstance(details, dict) else {}),
+            "cached_tokens": cached_tokens,
+        }
+    elif "input_tokens_details" in updated_usage:
+        details = updated_usage.get("input_tokens_details")
+        updated_usage["input_tokens_details"] = {
+            **(details if isinstance(details, dict) else {}),
+            "cached_tokens": cached_tokens,
+        }
+    elif "input_tokens" in updated_usage:
+        updated_usage["cache_read_input_tokens"] = cached_tokens
+    else:
+        return body
+    updated_body["usage"] = updated_usage
+    return updated_body
+
+
 def _note_and_check_repeat_miss(
     prompt_cache_key: Optional[str], cache_hit: bool, now: float
 ) -> bool:
@@ -1086,6 +1118,10 @@ class ProxyService:
                 if normalize_protocol(request_protocol) == "openai" and not is_image_path:
                     ensure_openai_usage_details(
                         response_body, conversion_data["upstream_response_body"]
+                    )
+                if gateway_response_cache_hit:
+                    response_body = _body_with_gateway_response_cache_usage(
+                        response_body, input_tokens
                     )
                 result.response.body = response_body
             except Exception as e:
