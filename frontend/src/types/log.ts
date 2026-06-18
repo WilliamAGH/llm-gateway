@@ -22,9 +22,31 @@ export interface RequestLog {
   total_cost?: number | null;
   input_cost?: number | null;
   output_cost?: number | null;
+  cached_input_cost?: number | null;
+  cached_output_cost?: number | null;
   response_status?: number;
   trace_id?: string;
   is_stream?: boolean;
+}
+
+export interface LogUsageDetails {
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  total_tokens?: number | null;
+  cached_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+  input_audio_tokens?: number | null;
+  output_audio_tokens?: number | null;
+  input_image_tokens?: number | null;
+  output_image_tokens?: number | null;
+  input_video_tokens?: number | null;
+  output_video_tokens?: number | null;
+  reasoning_tokens?: number | null;
+  tool_tokens?: number | null;
+  source?: string | null;
+  raw_usage?: Record<string, unknown> | null;
+  extra_usage?: Record<string, unknown> | null;
 }
 
 /** Request Log Detail Entity (Includes full request/response) */
@@ -36,8 +58,7 @@ export interface RequestLogDetail extends RequestLog {
   request_body?: Record<string, any>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   response_body?: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  usage_details?: Record<string, any>;
+  usage_details?: LogUsageDetails;
   error_info?: string;
   price_source?: 'SupplierOverride' | 'ModelFallback' | 'DefaultZero' | string | null;
   request_protocol?: string;

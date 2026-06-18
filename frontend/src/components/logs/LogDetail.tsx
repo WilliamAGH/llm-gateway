@@ -36,7 +36,7 @@ import {
   WrapText,
   Waves,
 } from "lucide-react";
-import { RequestLogDetail } from "@/types";
+import type { LogUsageDetails, RequestLogDetail } from "@/types";
 import {
   copyToClipboard,
   formatDateTime,
@@ -150,6 +150,28 @@ function resolveOriginalRequestUrl(
   }
 }
 
+function positiveTokenCount(value: number | null | undefined): number {
+  return typeof value === "number" && value > 0 ? value : 0;
+}
+
+function cacheReadTokens(log: RequestLogDetail | null): number {
+  const details = log?.usage_details;
+  if (!details) return 0;
+  return (
+    positiveTokenCount(details.cache_read_input_tokens) ||
+    positiveTokenCount(details.cached_tokens)
+  );
+}
+
+function costTooltip(log: RequestLogDetail): string {
+  return [
+    `Input: ${formatUsd(log.input_cost)}`,
+    `Output: ${formatUsd(log.output_cost)}`,
+    `Cached input: ${formatUsd(log.cached_input_cost)}`,
+    `Cached output: ${formatUsd(log.cached_output_cost)}`,
+  ].join("\n");
+}
+
 /**
  * Log Detail Component
  */
@@ -212,14 +234,15 @@ export function LogDetail({ log }: LogDetailProps) {
       ),
     [clientOrigin, log?.request_headers, log?.request_path, log?.request_url],
   );
+  const cacheReadTokenCount = useMemo(() => cacheReadTokens(log), [log]);
 
   // Token usage details - only show fields with non-zero values
   const tokenUsageItems = useMemo(() => {
     const details = log?.usage_details;
     if (!details) return [];
 
-    const labelMap: Record<string, string> = {
-      cached_tokens: t("detail.tokenUsage.cachedTokens"),
+    const labelMap = {
+      cached_tokens: t("detail.tokenUsage.cacheRead"),
       cache_creation_input_tokens: t("detail.tokenUsage.cacheCreation"),
       cache_read_input_tokens: t("detail.tokenUsage.cacheRead"),
       input_audio_tokens: t("detail.tokenUsage.inputAudio"),
@@ -230,9 +253,9 @@ export function LogDetail({ log }: LogDetailProps) {
       output_video_tokens: t("detail.tokenUsage.outputVideo"),
       reasoning_tokens: t("detail.tokenUsage.reasoning"),
       tool_tokens: t("detail.tokenUsage.toolTokens"),
-    };
+    } satisfies Partial<Record<keyof LogUsageDetails, string>>;
 
-    return Object.entries(labelMap)
+    return (Object.entries(labelMap) as Array<[keyof LogUsageDetails, string]>)
       .filter(([key]) => {
         const value = details[key];
         return typeof value === "number" && value > 0;
@@ -706,7 +729,7 @@ export function LogDetail({ log }: LogDetailProps) {
             <div className="mb-2 text-sm font-medium">
               {t("detail.metrics")}
             </div>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3 lg:grid-cols-7">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-4 xl:grid-cols-8">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-muted-foreground">
                   {t("detail.ttfb")}
@@ -728,6 +751,23 @@ export function LogDetail({ log }: LogDetailProps) {
                   {t("detail.input")}
                 </span>
                 <span className="font-medium">{log.input_tokens ?? 0}</span>
+              </div>
+              <div
+                className="flex items-center justify-between gap-2"
+                title="Cache Read"
+              >
+                <span className="text-muted-foreground">
+                  {t("detail.tokenUsage.cacheRead")}
+                </span>
+                <span
+                  className={
+                    cacheReadTokenCount > 0
+                      ? "font-medium text-emerald-500"
+                      : "font-medium"
+                  }
+                >
+                  {cacheReadTokenCount.toLocaleString()}
+                </span>
               </div>
               <div className="flex items-center justify-between gap-2">
                 <span className="text-muted-foreground">
@@ -751,10 +791,7 @@ export function LogDetail({ log }: LogDetailProps) {
               </div>
               <div
                 className="flex items-center justify-between gap-2"
-                title={t("detail.costTooltip", {
-                  input: formatUsd(log.input_cost),
-                  output: formatUsd(log.output_cost),
-                })}
+                title={costTooltip(log)}
               >
                 <span className="text-muted-foreground">
                   {t("detail.cost")}
