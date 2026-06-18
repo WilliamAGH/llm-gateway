@@ -68,6 +68,13 @@ def header_value(headers: Mapping[str, str], name: str) -> Optional[str]:
     return None
 
 
+def is_batch_tier(tier: Optional[str]) -> bool:
+    """Single source of truth for the batch-tier check: True when a resolved tier string is the
+    batch lane (the long-running harness lane). Shared by the stream-deadline policy and the
+    Anthropic prompt-cache gate so the comparison lives in exactly one place."""
+    return (tier or "").strip().lower() == BATCH_TIER
+
+
 @dataclass(frozen=True)
 class StreamDeadlinePolicy:
     """Chooses (first_byte, idle) stream deadlines by request class.
@@ -107,7 +114,7 @@ class StreamDeadlinePolicy:
         requested_model: str = "",
         target_model: str = "",
     ) -> tuple[float, float]:
-        if (tier or "").strip().lower() == BATCH_TIER:
+        if is_batch_tier(tier):
             return self.batch_first_byte, self.onprem_idle
         # The :onprem signal is a published-alias suffix carried on the
         # requested model (e.g. "qwen3.6:onprem"). target_model is the

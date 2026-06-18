@@ -11,6 +11,7 @@ from app.common.http_timeout import (
     StreamStalled,
     build_http_timeout,
     header_value,
+    is_batch_tier,
     iter_with_stall_guard,
 )
 
@@ -21,6 +22,16 @@ POLICY = StreamDeadlinePolicy(
     saas_idle=20.0,
     onprem_idle=60.0,
 )
+
+
+def test_is_batch_tier_single_source_of_truth():
+    # The one shared tier check used by both the deadline policy and the Anthropic cache gate.
+    assert is_batch_tier("batch") is True
+    assert is_batch_tier("  BATCH  ") is True  # trimmed + case-insensitive
+    assert is_batch_tier("production-a") is False
+    assert is_batch_tier("batch-job") is False  # only the canonical token counts
+    assert is_batch_tier(None) is False
+    assert is_batch_tier("") is False
 
 
 def test_policy_saas_production_stays_tight():

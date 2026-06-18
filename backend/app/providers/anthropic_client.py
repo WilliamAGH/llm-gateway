@@ -15,12 +15,12 @@ import httpx
 from app.common.upstream_url import build_upstream_url
 from app.common.timer import Timer
 from app.common.http_timeout import (
-    BATCH_TIER,
     TIER_HEADER,
     StreamDeadlinePolicy,
     StreamStalled,
     build_http_timeout,
     header_value,
+    is_batch_tier,
     iter_with_stall_guard,
 )
 from app.config import get_settings
@@ -37,8 +37,9 @@ EXTENDED_CACHE_TTL = "1h"
 
 
 def _is_batch_tier(headers: dict[str, str]) -> bool:
-    """True for the batch tier (the long-running harness lane); mirrors http_timeout's tier check."""
-    return (header_value(headers, TIER_HEADER) or "").strip().lower() == BATCH_TIER
+    """True for the batch tier (the long-running harness lane). Reads the tier header, then defers
+    the classification to http_timeout.is_batch_tier (the single source of truth)."""
+    return is_batch_tier(header_value(headers, TIER_HEADER))
 
 
 def _set_cache_control_ttl(node: Any, ttl: str) -> None:
