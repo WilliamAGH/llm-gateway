@@ -167,7 +167,11 @@ def _normalize_usage(usage: dict[str, Any], usage_kind: str) -> UsageDetails:
             or usage.get("output_token_details")
         )
         if isinstance(input_details, dict):
-            cached_tokens = cached_tokens or _safe_int(input_details.get("cached_tokens"))
+            detail_cached_tokens = _safe_int(input_details.get("cached_tokens"))
+            cached_tokens = cached_tokens or detail_cached_tokens
+            cache_read_input_tokens = (
+                cache_read_input_tokens or detail_cached_tokens
+            )
             input_audio_tokens = _safe_int(input_details.get("audio_tokens"))
             input_image_tokens = _safe_int(input_details.get("image_tokens"))
             input_video_tokens = _safe_int(input_details.get("video_tokens"))
@@ -182,6 +186,8 @@ def _normalize_usage(usage: dict[str, Any], usage_kind: str) -> UsageDetails:
 
     if total_tokens is None and input_tokens is not None and output_tokens is not None:
         total_tokens = input_tokens + output_tokens
+    if cache_read_input_tokens is None:
+        cache_read_input_tokens = cached_tokens
 
     mapped_keys = {
         "prompt_tokens",

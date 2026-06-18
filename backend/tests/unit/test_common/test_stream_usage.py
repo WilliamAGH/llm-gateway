@@ -59,6 +59,7 @@ def test_openai_responses_stream_preserves_cached_tokens_from_usage_details():
     assert result.output_tokens == 615
     assert result.usage_details is not None
     assert result.usage_details["cached_tokens"] == 25088
+    assert result.usage_details["cache_read_input_tokens"] == 25088
     assert result.usage_details["raw_usage"]["input_tokens_details"] == {
         "cached_tokens": 25088
     }

@@ -28,6 +28,7 @@ def test_extract_usage_details_openai_details_fields():
     assert details.input_tokens == 10
     assert details.output_tokens == 4
     assert details.cached_tokens == 2
+    assert details.cache_read_input_tokens == 2
     assert details.input_audio_tokens == 3
     assert details.output_image_tokens == 5
     assert details.reasoning_tokens == 1
