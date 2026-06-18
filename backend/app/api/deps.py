@@ -133,6 +133,7 @@ def get_proxy_service(db: DbSession) -> ProxyService:
         priority_strategy=_priority_strategy,
         prefix_affinity_strategy=_prefix_affinity_strategy,
         protocol_hooks=protocol_hooks,
+        kv_repo=kv_repo,
     )
 
 

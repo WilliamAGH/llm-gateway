@@ -12,7 +12,7 @@ from typing import Any, AsyncGenerator, Optional
 
 import anyio
 
-from app.common.costs import calculate_cost_from_billing, resolve_billing
+from app.common.costs import CostBreakdown, calculate_cost_from_billing, resolve_billing
 from app.common.errors import NotFoundError, ServiceError
 from app.common.protocol_conversion import (
     convert_request_for_supplier,
@@ -36,6 +36,7 @@ from app.providers import ProviderResponse, get_provider_client
 from app.repositories.log_repo import LogRepository
 from app.repositories.model_repo import ModelRepository
 from app.repositories.provider_repo import ProviderRepository
+from app.repositories.kv_store_repo import KVStoreRepository
 from app.rules import CandidateProvider, RuleContext, RuleEngine, TokenUsage
 from app.services.retry_handler import AttemptRecord, RetryHandler
 from app.services.protocol_hooks import OPENAI_IMAGE_PATHS, ProtocolConversionHooks
@@ -60,6 +61,10 @@ CandidateKey = tuple[str, int] | tuple[str, int, str]
 # starts. Process-local and best-effort; the authoritative signal is the per-request structured log.
 _CACHE_KEY_TTL_SECONDS = 600.0
 _PROMPT_CACHE_PREFIX_CHARS = 8192
+_EXACT_RESPONSE_CACHE_TTL_SECONDS = 600
+_EXACT_RESPONSE_CACHE_MIN_INPUT_TOKENS = 1024
+_EXACT_RESPONSE_CACHE_PREFIX = "exact_response:v1:"
+_EXACT_RESPONSE_CACHE_HIT_HEADER = "x-llm-gateway-response-cache"
 _recent_prompt_cache_keys: dict[str, float] = {}
 
 
@@ -166,6 +171,111 @@ def _request_has_cache_signal(body: Any) -> bool:
     return any(
         isinstance(m, dict) and _has_cache_control(m.get("content"))
         for m in (body.get("messages") or [])
+    )
+
+
+def _exact_response_cache_key(
+    *,
+    api_key_id: Optional[int],
+    method: str,
+    supplier_path: str,
+    requested_model: str,
+    provider_id: int,
+    provider_mapping_id: Optional[int],
+    target_model: str,
+    supplier_body: Any,
+) -> str:
+    seed = json.dumps(
+        {
+            "api_key_id": api_key_id,
+            "method": method.upper(),
+            "supplier_path": supplier_path,
+            "requested_model": requested_model,
+            "provider_id": provider_id,
+            "provider_mapping_id": provider_mapping_id,
+            "target_model": target_model,
+            "supplier_body": supplier_body,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+    return f"{_EXACT_RESPONSE_CACHE_PREFIX}{digest}"
+
+
+def _exact_response_cache_allowed(
+    *,
+    request_protocol: str,
+    supplier_protocol: Optional[str],
+    supplier_body: Any,
+    method: str,
+    prompt_cache_key: Optional[str],
+    requested_model: str,
+    target_model: str,
+    base_url: str,
+    input_tokens: Optional[int],
+) -> bool:
+    if method.upper() != "POST" or not prompt_cache_key:
+        return False
+    if normalize_protocol(request_protocol) == normalize_protocol(supplier_protocol):
+        return False
+    if supplier_protocol != "openai_responses":
+        return False
+    if _prompt_cache_namespace(requested_model, target_model, base_url) != "openai":
+        return False
+    if int(input_tokens or 0) < _EXACT_RESPONSE_CACHE_MIN_INPUT_TOKENS:
+        return False
+    if not isinstance(supplier_body, dict):
+        return False
+    if supplier_body.get("stream"):
+        return False
+    if supplier_body.get("background"):
+        return False
+    if supplier_body.get("store") is True:
+        return False
+    uncacheable_keys = {
+        "tools",
+        "tool_choice",
+        "previous_response_id",
+        "conversation",
+        "include",
+        "prompt",
+        "_files",
+    }
+    return not any(key in supplier_body for key in uncacheable_keys)
+
+
+def _exact_response_cache_payload(response: ProviderResponse) -> Optional[str]:
+    if not response.is_success or not isinstance(response.body, (dict, list)):
+        return None
+    return json.dumps(
+        {
+            "status_code": response.status_code,
+            "headers": response.headers or {},
+            "body": response.body,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+
+
+def _provider_response_from_exact_cache(value: str, elapsed_ms: int) -> Optional[ProviderResponse]:
+    try:
+        payload = json.loads(value)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    headers = payload.get("headers") if isinstance(payload.get("headers"), dict) else {}
+    return ProviderResponse(
+        status_code=int(payload.get("status_code") or 200),
+        headers={**headers, _EXACT_RESPONSE_CACHE_HIT_HEADER: "hit"},
+        body=payload.get("body"),
+        first_byte_delay_ms=elapsed_ms,
+        total_time_ms=elapsed_ms,
     )
 
 
@@ -289,6 +399,7 @@ class ProxyService:
         priority_strategy: Optional[SelectionStrategy] = None,
         prefix_affinity_strategy: Optional[SelectionStrategy] = None,
         protocol_hooks: Optional[ProtocolConversionHooks] = None,
+        kv_repo: Optional[KVStoreRepository] = None,
     ):
         """
         Initialize Service
@@ -313,6 +424,7 @@ class ProxyService:
             prefix_affinity_strategy or PrefixAffinityStrategy()
         )
         self._protocol_hooks = protocol_hooks or ProtocolConversionHooks()
+        self._kv_repo = kv_repo
 
     async def _write_log(self, log_data: RequestLogCreate) -> None:
         await self.log_repo.create(log_data)
@@ -628,6 +740,7 @@ class ProxyService:
             "converted_request_body": None,
             "upstream_response_body": None,
         }
+        gateway_response_cache_hit = False
 
         async def log_failed_attempt(attempt: AttemptRecord) -> None:
             nonlocal failed_attempt_logged
@@ -729,6 +842,7 @@ class ProxyService:
 
         # 8. Execute request (with retry)
         async def forward_fn(candidate: CandidateProvider) -> ProviderResponse:
+            nonlocal gateway_response_cache_hit
             supplier_protocol: Optional[str] = None
             try:
                 is_image_path = path in OPENAI_IMAGE_PATHS
@@ -797,6 +911,52 @@ class ProxyService:
                 conversion_data["upstream_url"] = build_upstream_url(
                     candidate.base_url, supplier_path
                 )
+                exact_cache_key = None
+                if _exact_response_cache_allowed(
+                    request_protocol=request_protocol,
+                    supplier_protocol=supplier_protocol,
+                    supplier_body=supplier_body,
+                    method=method,
+                    prompt_cache_key=prompt_cache_key,
+                    requested_model=requested_model,
+                    target_model=candidate.target_model,
+                    base_url=candidate.base_url,
+                    input_tokens=input_tokens,
+                ):
+                    exact_cache_key = _exact_response_cache_key(
+                        api_key_id=api_key_id,
+                        method=method,
+                        supplier_path=supplier_path,
+                        requested_model=requested_model,
+                        provider_id=candidate.provider_id,
+                        provider_mapping_id=candidate.provider_mapping_id,
+                        target_model=candidate.target_model,
+                        supplier_body=supplier_body,
+                    )
+                    if self._kv_repo is not None:
+                        cache_start = time.monotonic()
+                        try:
+                            cached = await self._kv_repo.get(exact_cache_key)
+                            if cached is not None:
+                                elapsed_ms = int((time.monotonic() - cache_start) * 1000)
+                                cached_response = _provider_response_from_exact_cache(
+                                    cached.value, elapsed_ms
+                                )
+                                if cached_response is not None:
+                                    gateway_response_cache_hit = True
+                                    logger.info(
+                                        "gateway exact response cache hit model=%s provider_id=%s key=%s",
+                                        requested_model,
+                                        candidate.provider_id,
+                                        exact_cache_key,
+                                    )
+                                    return cached_response
+                        except Exception:
+                            logger.exception(
+                                "gateway exact response cache read failed model=%s provider_id=%s",
+                                requested_model,
+                                candidate.provider_id,
+                            )
                 same_protocol = normalize_protocol(
                     request_protocol
                 ) == normalize_protocol(supplier_protocol)
@@ -804,7 +964,7 @@ class ProxyService:
                     candidate.proxy_enabled,
                     candidate.proxy_url,
                 )
-                return await client.forward(
+                response = await client.forward(
                     base_url=candidate.base_url,
                     api_key=candidate.api_key,
                     path=supplier_path,
@@ -818,6 +978,29 @@ class ProxyService:
                     extra_headers=candidate.extra_headers,
                     proxy_config=proxy_config,
                 )
+                if exact_cache_key and self._kv_repo is not None:
+                    payload = _exact_response_cache_payload(response)
+                    if payload is not None:
+                        try:
+                            await self._kv_repo.set(
+                                exact_cache_key,
+                                payload,
+                                ttl_seconds=_EXACT_RESPONSE_CACHE_TTL_SECONDS,
+                            )
+                            logger.info(
+                                "gateway exact response cache stored model=%s provider_id=%s key=%s ttl_seconds=%s",
+                                requested_model,
+                                candidate.provider_id,
+                                exact_cache_key,
+                                _EXACT_RESPONSE_CACHE_TTL_SECONDS,
+                            )
+                        except Exception:
+                            logger.exception(
+                                "gateway exact response cache write failed model=%s provider_id=%s",
+                                requested_model,
+                                candidate.provider_id,
+                            )
+                return response
             except Exception as e:
                 error_msg = str(e)
                 logger.error(
@@ -966,6 +1149,18 @@ class ProxyService:
                     "total_tokens": (input_tokens or 0) + (output_tokens or 0),
                     "source": "estimated",
                 }
+            if gateway_response_cache_hit:
+                if usage_details is None:
+                    usage_details = {
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "total_tokens": (input_tokens or 0) + (output_tokens or 0),
+                    }
+                usage_details["source"] = "gateway_response_cache"
+                usage_details["gateway_response_cache_hit"] = True
+                usage_details["cache_read_input_tokens"] = (
+                    usage_details.get("input_tokens") or input_tokens or 0
+                )
 
         # 10. Record log
         provider_mapping = (
@@ -1047,13 +1242,16 @@ class ProxyService:
                 )
         except Exception:
             pass
-        cost = calculate_cost_from_billing(
-            billing=billing,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            image_count=image_count,
-            cached_input_tokens=cached_input_tokens,
-        )
+        if gateway_response_cache_hit:
+            cost = CostBreakdown(total_cost=0.0, input_cost=0.0, output_cost=0.0)
+        else:
+            cost = calculate_cost_from_billing(
+                billing=billing,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                image_count=image_count,
+                cached_input_tokens=cached_input_tokens,
+            )
         log_data = RequestLogCreate(
             request_time=request_time,
             api_key_id=api_key_id,

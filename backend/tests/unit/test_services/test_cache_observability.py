@@ -3,6 +3,8 @@
 import app.services.proxy_service as ps
 from app.services.proxy_service import (
     _body_with_prompt_cache_key,
+    _exact_response_cache_allowed,
+    _exact_response_cache_key,
     _note_and_check_repeat_miss,
     _prompt_cache_key_for_request,
     _request_has_cache_signal,
@@ -216,3 +218,60 @@ class TestRepeatMissDetection:
 
     def test_none_key_never_warns(self):
         assert _note_and_check_repeat_miss(None, cache_hit=False, now=100.0) is False
+
+
+class TestExactResponseCache:
+    def test_allows_long_cross_protocol_gpt_responses_request(self):
+        assert _exact_response_cache_allowed(
+            request_protocol="anthropic",
+            supplier_protocol="openai_responses",
+            supplier_body={"model": "gpt-5.4", "input": "stable", "prompt_cache_key": "k"},
+            method="POST",
+            prompt_cache_key="k",
+            requested_model="gpt-5.4",
+            target_model="gpt-5.4",
+            base_url="https://api.openai.com/v1",
+            input_tokens=2048,
+        ) is True
+
+    def test_rejects_native_or_stateful_or_short_requests(self):
+        base = {
+            "request_protocol": "anthropic",
+            "supplier_protocol": "openai_responses",
+            "supplier_body": {"model": "gpt-5.4", "input": "stable", "prompt_cache_key": "k"},
+            "method": "POST",
+            "prompt_cache_key": "k",
+            "requested_model": "gpt-5.4",
+            "target_model": "gpt-5.4",
+            "base_url": "https://api.openai.com/v1",
+            "input_tokens": 2048,
+        }
+
+        assert _exact_response_cache_allowed(**{**base, "request_protocol": "openai_responses"}) is False
+        assert _exact_response_cache_allowed(**{**base, "input_tokens": 512}) is False
+        assert _exact_response_cache_allowed(
+            **{**base, "supplier_body": {**base["supplier_body"], "tools": []}}
+        ) is False
+        assert _exact_response_cache_allowed(
+            **{**base, "supplier_body": {**base["supplier_body"], "store": True}}
+        ) is False
+
+    def test_cache_key_includes_api_key_provider_and_exact_supplier_body(self):
+        base = {
+            "api_key_id": 3,
+            "method": "POST",
+            "supplier_path": "/v1/responses",
+            "requested_model": "gpt-5.4",
+            "provider_id": 14,
+            "provider_mapping_id": None,
+            "target_model": "gpt-5.4",
+            "supplier_body": {"model": "gpt-5.4", "input": "stable", "prompt_cache_key": "k"},
+        }
+
+        assert _exact_response_cache_key(**base) == _exact_response_cache_key(**base)
+        assert _exact_response_cache_key(**base) != _exact_response_cache_key(
+            **{**base, "api_key_id": 4}
+        )
+        assert _exact_response_cache_key(**base) != _exact_response_cache_key(
+            **{**base, "supplier_body": {**base["supplier_body"], "max_output_tokens": 16}}
+        )

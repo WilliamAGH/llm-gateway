@@ -230,6 +230,77 @@ def test_convert_request_anthropic_to_openai_chat_strips_sdk_billing_system_bloc
     assert _REAL_SYSTEM_TEXT in system_text
 
 
+def test_convert_request_anthropic_to_openai_responses_defaults_24h_cache_retention():
+    # OpenAI's default ("in-memory") retention lives only minutes and routes best-effort, so identical
+    # repeats intermittently miss. Default the Responses request to 24h extended caching for stable hits.
+    _path, out_body = convert_request_for_supplier(
+        request_protocol="anthropic",
+        supplier_protocol="openai_responses",
+        path="/v1/messages",
+        body={
+            "model": "any",
+            "system": [{"type": "text", "text": _REAL_SYSTEM_TEXT}],
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 16,
+        },
+        target_model="gpt-5.4",
+    )
+
+    assert out_body["prompt_cache_retention"] == "24h"
+
+
+def test_convert_request_openai_to_openai_responses_defaults_24h_cache_retention():
+    _path, out_body = convert_request_for_supplier(
+        request_protocol="openai",
+        supplier_protocol="openai_responses",
+        path="/v1/chat/completions",
+        body={
+            "model": "any",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 12,
+        },
+        target_model="gpt-5.4",
+    )
+
+    assert out_body["prompt_cache_retention"] == "24h"
+
+
+def test_convert_request_openai_responses_preserves_client_cache_retention():
+    # A client that explicitly opts into the in-memory tier must win over the gateway default.
+    _path, out_body = convert_request_for_supplier(
+        request_protocol="openai",
+        supplier_protocol="openai_responses",
+        path="/v1/chat/completions",
+        body={
+            "model": "any",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 12,
+            "prompt_cache_retention": "in-memory",
+        },
+        target_model="gpt-5.4",
+    )
+
+    assert out_body["prompt_cache_retention"] == "in-memory"
+
+
+def test_convert_request_anthropic_to_openai_chat_does_not_set_responses_retention():
+    # prompt_cache_retention is a Responses-only field; a chat-completions supplier must not receive it.
+    _path, out_body = convert_request_for_supplier(
+        request_protocol="anthropic",
+        supplier_protocol="openai",
+        path="/v1/messages",
+        body={
+            "model": "any",
+            "system": [{"type": "text", "text": _REAL_SYSTEM_TEXT}],
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 16,
+        },
+        target_model="gpt-5.4",
+    )
+
+    assert "prompt_cache_retention" not in out_body
+
+
 def test_convert_request_anthropic_to_anthropic_keeps_sdk_billing_system_block():
     # An anthropic-protocol supplier consumes its own billing marker server-side, so keep it intact —
     # stripping is only for OpenAI-bound conversions where the rotating token poisons the cache prefix.

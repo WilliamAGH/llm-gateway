@@ -94,6 +94,9 @@ _IMAGE_PATHS = {"/v1/images/generations", "/v1/images/edits", "/v1/images/variat
 _LEGACY_IMAGE_RESPONSE_FORMAT_MODELS = {"dall-e-2", "dall-e-3"}
 _OPENAI_USER_IDENTIFIER_MAX_LENGTH = 64
 _ANTHROPIC_BILLING_SYSTEM_PREFIX = "x-anthropic-billing-header:"
+# OpenAI's default ("in-memory") prompt cache lives only minutes and routes best-effort, so identical
+# repeats intermittently return cached_tokens=0. "24h" opts into extended caching (Responses API only).
+_OPENAI_RESPONSES_CACHE_RETENTION = "24h"
 
 
 def _apply_image_defaults(path: str, body: dict[str, Any], target_model: str) -> None:
@@ -228,6 +231,18 @@ def convert_request_for_supplier(
             ANTHROPIC_PROTOCOL,
         ):
             _normalize_openai_user_identifier(converted_body)
+
+        if (
+            supplier_protocol == OPENAI_RESPONSES_PROTOCOL
+            and "prompt_cache_retention" not in converted_body
+        ):
+            # Honor an explicit client choice (the conversion can drop it), else default to 24h.
+            client_retention = (
+                body.get("prompt_cache_retention") if isinstance(body, dict) else None
+            )
+            converted_body["prompt_cache_retention"] = (
+                client_retention or _OPENAI_RESPONSES_CACHE_RETENTION
+            )
 
         _apply_image_defaults(result.path, converted_body, target_model)
 

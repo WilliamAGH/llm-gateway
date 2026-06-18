@@ -13,6 +13,41 @@ from app.services.proxy_service import ProxyService
 from app.services.strategy import SelectionStrategy
 
 
+class MemoryKVStore:
+    def __init__(self):
+        self.values: dict[str, str] = {}
+
+    async def get(self, key: str):
+        value = self.values.get(key)
+        if value is None:
+            return None
+        now = utc_now()
+        return KeyValueModel(
+            key=key,
+            value=value,
+            expires_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+
+    async def set(self, key: str, value: str, ttl_seconds: int | None = None):
+        self.values[key] = value
+        now = utc_now()
+        return KeyValueModel(
+            key=key,
+            value=value,
+            expires_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+
+    async def delete(self, key: str) -> bool:
+        return self.values.pop(key, None) is not None
+
+    async def cleanup_expired(self) -> int:
+        return 0
+
+
 class RecordingHooks(ProtocolConversionHooks):
     async def before_request_conversion(self, body, request_protocol, supplier_protocol):
         return {**body, "before": True}
@@ -132,6 +167,7 @@ def _gpt_responses_candidate() -> CandidateProvider:
 
 def _gpt_responses_proxy_service(
     affinity_strategy: RecordingAffinityStrategy,
+    kv_repo=None,
 ) -> ProxyService:
     service = ProxyService(
         model_repo=AsyncMock(),
@@ -139,6 +175,7 @@ def _gpt_responses_proxy_service(
         log_repo=AsyncMock(),
         prefix_affinity_strategy=affinity_strategy,
         protocol_hooks=ProtocolConversionHooks(),
+        kv_repo=kv_repo,
     )
     service._resolve_candidates = AsyncMock(
         return_value=(
@@ -531,6 +568,101 @@ async def test_gpt5_messages_request_derives_prompt_cache_key_for_openai_respons
     assert affinity_strategy.affinity_keys == [prompt_cache_key]
     assert "prompt_cache_key" not in original_body
     service.log_repo.create.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_gpt5_messages_exact_repeat_uses_gateway_response_cache():
+    affinity_strategy = RecordingAffinityStrategy()
+    kv_repo = MemoryKVStore()
+    service = _gpt_responses_proxy_service(affinity_strategy, kv_repo=kv_repo)
+    original_body = {
+        "model": "gpt-5.4",
+        "system": [
+            {
+                "type": "text",
+                "text": "stable prefix " * 900,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    def fake_convert_request_for_supplier(*, body, **kwargs):
+        return "/v1/responses", {
+            "model": "gpt-5.4",
+            "input": "stable prefix",
+            "prompt_cache_key": body["prompt_cache_key"],
+            "max_output_tokens": 16,
+        }
+
+    def fake_convert_response_for_user(**kwargs):
+        return kwargs["body"]
+
+    async def forward(*, body: dict, **kwargs):
+        return ProviderResponse(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body={
+                "id": "resp_test",
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "cached body"}],
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 2048,
+                    "output_tokens": 5,
+                    "total_tokens": 2053,
+                    "input_tokens_details": {"cached_tokens": 0},
+                },
+            },
+        )
+
+    fake_client = AsyncMock()
+    fake_client.forward = AsyncMock(side_effect=forward)
+
+    with patch(
+        "app.services.proxy_service.convert_request_for_supplier",
+        side_effect=fake_convert_request_for_supplier,
+    ):
+        with patch(
+            "app.services.proxy_service.convert_response_for_user",
+            side_effect=fake_convert_response_for_user,
+        ):
+            with patch(
+                "app.services.proxy_service.get_provider_client",
+                return_value=fake_client,
+            ):
+                first_response, _ = await service.process_request(
+                    api_key_id=3,
+                    api_key_name="back-end-staging",
+                    request_protocol="anthropic",
+                    path="/v1/messages",
+                    request_url="/v1/messages",
+                    method="POST",
+                    headers={},
+                    body=original_body,
+                )
+                second_response, _ = await service.process_request(
+                    api_key_id=3,
+                    api_key_name="back-end-staging",
+                    request_protocol="anthropic",
+                    path="/v1/messages",
+                    request_url="/v1/messages",
+                    method="POST",
+                    headers={},
+                    body=original_body,
+                )
+
+    assert fake_client.forward.await_count == 1
+    assert first_response.body == second_response.body
+    assert second_response.headers["x-llm-gateway-response-cache"] == "hit"
+    second_log = service.log_repo.create.await_args_list[-1].args[0]
+    assert second_log.usage_details["source"] == "gateway_response_cache"
+    assert second_log.usage_details["gateway_response_cache_hit"] is True
+    assert second_log.usage_details["cache_read_input_tokens"] == 2048
+    assert second_log.total_cost == 0.0
 
 
 @pytest.mark.asyncio
