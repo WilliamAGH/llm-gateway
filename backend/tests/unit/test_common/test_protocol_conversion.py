@@ -149,6 +149,29 @@ def test_convert_request_anthropic_to_openai_responses_hashes_long_user_id():
     assert len(out_body["user"]) == 64
 
 
+def test_convert_request_anthropic_to_anthropic_hashes_long_metadata_user_id():
+    # An anthropic-protocol supplier can front an OpenAI backend, which 400s a >64-char user id. The
+    # id stays on metadata.user_id here (no openai `user` field), so it must be capped on that field.
+    long_user = "u" * 150
+
+    _path, out_body = convert_request_for_supplier(
+        request_protocol="anthropic",
+        supplier_protocol="anthropic",
+        path="/v1/messages",
+        body={
+            "model": "any",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 16,
+            "metadata": {"user_id": long_user},
+        },
+        target_model="gpt-5.4",
+    )
+
+    hashed = hashlib.sha256(long_user.encode("utf-8")).hexdigest()
+    assert out_body["metadata"]["user_id"] == hashed
+    assert len(out_body["metadata"]["user_id"]) == 64
+
+
 def test_convert_request_openai_to_anthropic_maps_reasoning_effort():
     path, out_body = convert_request_for_supplier(
         request_protocol="openai",

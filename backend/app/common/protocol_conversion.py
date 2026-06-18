@@ -103,10 +103,22 @@ def _apply_image_defaults(path: str, body: dict[str, Any], target_model: str) ->
 
 
 def _normalize_openai_user_identifier(body: dict[str, Any]) -> None:
-    """Keep OpenAI-bound user identifiers within the provider's 64-character limit."""
+    """Keep OpenAI-bound user identifiers within the provider's 64-character limit.
+
+    The id is carried on whichever field the supplier body uses: OpenAI/Responses put it in ``user``,
+    while an ``anthropic``-protocol supplier keeps it in ``metadata.user_id``. The latter matters because
+    an Anthropic-protocol upstream can itself front an OpenAI backend, which rejects a >64-char user
+    identifier ("Invalid 'user': string too long"). A sha256 hex digest is exactly 64 chars, so it
+    stays a stable per-user identifier while satisfying the limit.
+    """
     user = body.get("user")
     if isinstance(user, str) and len(user) > _OPENAI_USER_IDENTIFIER_MAX_LENGTH:
         body["user"] = hashlib.sha256(user.encode("utf-8")).hexdigest()
+    metadata = body.get("metadata")
+    if isinstance(metadata, dict):
+        user_id = metadata.get("user_id")
+        if isinstance(user_id, str) and len(user_id) > _OPENAI_USER_IDENTIFIER_MAX_LENGTH:
+            metadata["user_id"] = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
 
 
 def convert_request_for_supplier(
@@ -168,7 +180,11 @@ def convert_request_for_supplier(
                 source_body=body,
             )
 
-        if supplier_protocol in (OPENAI_PROTOCOL, OPENAI_RESPONSES_PROTOCOL):
+        if supplier_protocol in (
+            OPENAI_PROTOCOL,
+            OPENAI_RESPONSES_PROTOCOL,
+            ANTHROPIC_PROTOCOL,
+        ):
             _normalize_openai_user_identifier(converted_body)
 
         _apply_image_defaults(result.path, converted_body, target_model)
