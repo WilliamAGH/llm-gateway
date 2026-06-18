@@ -655,10 +655,41 @@ class PrefixAffinityStrategy(SelectionStrategy):
         # Stable ordering independent of candidate list order, so the hash maps consistently.
         return sorted(candidates, key=_candidate_key)
 
+    @classmethod
+    def _group_candidates(
+        cls, candidates: list[CandidateProvider]
+    ) -> dict[int, list[CandidateProvider]]:
+        grouped: dict[int, list[CandidateProvider]] = {}
+        for candidate in candidates:
+            grouped.setdefault(candidate.priority, []).append(candidate)
+        return {priority: cls._sorted(group) for priority, group in grouped.items()}
+
+    @classmethod
+    def _top_priority_group(cls, candidates: list[CandidateProvider]) -> list[CandidateProvider]:
+        grouped = cls._group_candidates(candidates)
+        return grouped[min(grouped.keys())]
+
     @staticmethod
     def _bucket(affinity_key: str, total: int) -> int:
         digest = hashlib.sha256(affinity_key.encode("utf-8")).hexdigest()
         return int(digest, 16) % total
+
+    @classmethod
+    def _select_from_group(
+        cls, candidates: list[CandidateProvider], affinity_key: str
+    ) -> CandidateProvider:
+        ordered = cls._sorted(candidates)
+        total_weight = sum(c.weight for c in ordered)
+        if total_weight <= 0:
+            return ordered[cls._bucket(affinity_key, len(ordered))]
+
+        target = cls._bucket(affinity_key, total_weight)
+        cumulative = 0
+        for candidate in ordered:
+            cumulative += candidate.weight
+            if target < cumulative:
+                return candidate
+        return ordered[0]
 
     async def select(
         self,
@@ -672,24 +703,15 @@ class PrefixAffinityStrategy(SelectionStrategy):
         if not candidates:
             return None
 
+        top_priority_group = self._top_priority_group(candidates)
+
         # No stable key to pin on — preserve round-robin distribution.
         if not affinity_key:
             return await self._round_robin.select(
-                candidates, requested_model, input_tokens, image_count
+                top_priority_group, requested_model, input_tokens, image_count
             )
 
-        ordered = self._sorted(candidates)
-        total_weight = sum(c.weight for c in ordered)
-        if total_weight <= 0:
-            return ordered[self._bucket(affinity_key, len(ordered))]
-
-        target = self._bucket(affinity_key, total_weight)
-        cumulative = 0
-        for candidate in ordered:
-            cumulative += candidate.weight
-            if target < cumulative:
-                return candidate
-        return ordered[0]
+        return self._select_from_group(top_priority_group, affinity_key)
 
     async def get_next(
         self,
@@ -700,11 +722,16 @@ class PrefixAffinityStrategy(SelectionStrategy):
         image_count: Optional[int] = None,
         affinity_key: Optional[str] = None,
     ) -> Optional[CandidateProvider]:
-        """Deterministic failover: the next candidate in stable order after ``current``."""
+        """Deterministic failover: same-priority candidates first, then lower-priority tiers."""
         if not candidates or len(candidates) <= 1:
             return None
 
-        ordered = self._sorted(candidates)
+        grouped = self._group_candidates(candidates)
+        priorities = sorted(grouped.keys())
+        if current.priority not in grouped:
+            return None
+
+        ordered = grouped[current.priority]
         current_index = next(
             (i for i, c in enumerate(ordered) if _candidate_key(c) == _candidate_key(current)),
             -1,
@@ -712,7 +739,16 @@ class PrefixAffinityStrategy(SelectionStrategy):
         if current_index == -1:
             return None
 
-        next_index = (current_index + 1) % len(ordered)
-        if next_index == current_index:
+        if current_index + 1 < len(ordered):
+            return ordered[current_index + 1]
+
+        current_priority_index = priorities.index(current.priority)
+        if current_priority_index + 1 >= len(priorities):
             return None
-        return ordered[next_index]
+
+        next_group = grouped[priorities[current_priority_index + 1]]
+        if affinity_key:
+            return self._select_from_group(next_group, affinity_key)
+        return await self._round_robin.select(
+            next_group, requested_model, input_tokens, image_count
+        )

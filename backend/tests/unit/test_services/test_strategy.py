@@ -857,6 +857,138 @@ class TestPrefixAffinityStrategy:
         assert sorted(picks) == [c.provider_id for c in self.candidates]
 
     @pytest.mark.asyncio
+    async def test_affinity_selects_only_top_priority_group(self):
+        """A lower-priority fallback must not receive normal cache-affinity traffic."""
+        candidates = [
+            CandidateProvider(
+                provider_id=1,
+                provider_name="Fallback",
+                base_url="https://fallback.example",
+                protocol="openai",
+                api_key="fallback",
+                target_model="fallback-model",
+                priority=20,
+                weight=100,
+            ),
+            CandidateProvider(
+                provider_id=21,
+                provider_name="PrimaryA",
+                base_url="https://primary-a.example",
+                protocol="openai",
+                api_key="primary-a",
+                target_model="primary-a-model",
+                priority=0,
+                weight=1,
+            ),
+            CandidateProvider(
+                provider_id=22,
+                provider_name="PrimaryB",
+                base_url="https://primary-b.example",
+                protocol="openai",
+                api_key="primary-b",
+                target_model="primary-b-model",
+                priority=0,
+                weight=1,
+            ),
+        ]
+
+        seen = {
+            (await self.strategy.select(candidates, "m", affinity_key=f"prefix-{i}")).provider_id
+            for i in range(50)
+        }
+
+        assert seen <= {21, 22}
+        assert len(seen) > 1
+
+    @pytest.mark.asyncio
+    async def test_no_key_round_robins_only_top_priority_group(self):
+        """No-key fallback should still respect priority before round-robin."""
+        candidates = [
+            CandidateProvider(
+                provider_id=1,
+                provider_name="Fallback",
+                base_url="https://fallback.example",
+                protocol="openai",
+                api_key="fallback",
+                target_model="fallback-model",
+                priority=20,
+                weight=1,
+            ),
+            CandidateProvider(
+                provider_id=21,
+                provider_name="PrimaryA",
+                base_url="https://primary-a.example",
+                protocol="openai",
+                api_key="primary-a",
+                target_model="primary-a-model",
+                priority=0,
+                weight=1,
+            ),
+            CandidateProvider(
+                provider_id=22,
+                provider_name="PrimaryB",
+                base_url="https://primary-b.example",
+                protocol="openai",
+                api_key="primary-b",
+                target_model="primary-b-model",
+                priority=0,
+                weight=1,
+            ),
+        ]
+
+        picks = [
+            (await self.strategy.select(candidates, "m")).provider_id
+            for _ in range(4)
+        ]
+
+        assert picks == [21, 22, 21, 22]
+
+    @pytest.mark.asyncio
+    async def test_get_next_exhausts_priority_before_fallback(self):
+        """Failover walks same-priority candidates first, then lower-priority fallback."""
+        primary_a = CandidateProvider(
+            provider_id=21,
+            provider_name="PrimaryA",
+            base_url="https://primary-a.example",
+            protocol="openai",
+            api_key="primary-a",
+            target_model="primary-a-model",
+            priority=0,
+            weight=1,
+        )
+        primary_b = CandidateProvider(
+            provider_id=22,
+            provider_name="PrimaryB",
+            base_url="https://primary-b.example",
+            protocol="openai",
+            api_key="primary-b",
+            target_model="primary-b-model",
+            priority=0,
+            weight=1,
+        )
+        fallback = CandidateProvider(
+            provider_id=1,
+            provider_name="Fallback",
+            base_url="https://fallback.example",
+            protocol="openai",
+            api_key="fallback",
+            target_model="fallback-model",
+            priority=20,
+            weight=1,
+        )
+        candidates = [fallback, primary_b, primary_a]
+
+        first_failover = await self.strategy.get_next(
+            candidates, "m", primary_a, affinity_key="prefix-A"
+        )
+        second_failover = await self.strategy.get_next(
+            candidates, "m", primary_b, affinity_key="prefix-A"
+        )
+
+        assert first_failover == primary_b
+        assert second_failover == fallback
+
+    @pytest.mark.asyncio
     async def test_get_next_returns_a_different_provider(self):
         """Failover yields a distinct backend, deterministically."""
         current = await self.strategy.select(self.candidates, "m", affinity_key="prefix-A")
