@@ -10,7 +10,6 @@ import { usePathname } from 'next/navigation';
 import { Github } from 'lucide-react';
 import { Sidebar } from '@/components/common/Sidebar';
 import { ThemeToggle } from '@/components/common/ThemeToggle';
-import { LanguageSwitcher } from '@/components/common/LanguageSwitcher';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -35,7 +34,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
       {!isAuthRoute && (
         <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2">
-          <LanguageSwitcher />
           <ThemeToggle inline />
           <Button
             asChild
