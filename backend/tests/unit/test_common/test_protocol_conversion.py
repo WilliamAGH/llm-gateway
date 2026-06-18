@@ -53,11 +53,11 @@ async def test_convert_request_anthropic_to_openai_chat_completions():
             "max_tokens": 16,
             "metadata": {"user_id": "u1"},
         },
-        target_model="gpt-4o-mini",
+        target_model="gpt-5.4",
     )
 
     assert path == "/v1/chat/completions"
-    assert out_body["model"] == "gpt-4o-mini"
+    assert out_body["model"] == "gpt-5.4"
     assert out_body.get("user") == "u1"
     assert isinstance(out_body.get("messages"), list)
     assert out_body["messages"][0]["role"] == "system"
@@ -83,11 +83,11 @@ def test_convert_request_openai_legacy_functions_normalizes_to_tools():
             ],
             "function_call": {"name": "get_weather"},
         },
-        target_model="gpt-4o-mini",
+        target_model="gpt-5.4",
     )
 
     assert path == "/v1/chat/completions"
-    assert out_body["model"] == "gpt-4o-mini"
+    assert out_body["model"] == "gpt-5.4"
     assert isinstance(out_body.get("tools"), list)
     assert out_body["tools"][0]["type"] == "function"
     assert out_body["tools"][0]["function"]["name"] == "get_weather"
@@ -110,11 +110,11 @@ def test_convert_request_openai_to_openai_responses_chat():
             ],
             "max_tokens": 12,
         },
-        target_model="gpt-4o-mini",
+        target_model="gpt-5.4",
     )
 
     assert path == "/v1/responses"
-    assert out_body["model"] == "gpt-4o-mini"
+    assert out_body["model"] == "gpt-5.4"
     assert out_body["instructions"] == "You are helpful"
     # SDK may simplify single user message to string or keep as list
     input_val = out_body.get("input")
@@ -170,6 +170,86 @@ def test_convert_request_anthropic_to_anthropic_hashes_long_metadata_user_id():
     hashed = hashlib.sha256(long_user.encode("utf-8")).hexdigest()
     assert out_body["metadata"]["user_id"] == hashed
     assert len(out_body["metadata"]["user_id"]) == 64
+
+
+_REAL_SYSTEM_TEXT = "You are Claude Code, Anthropic's official CLI."
+
+
+def _billing_block(cch: str) -> dict:
+    # The Claude Agent SDK's synthetic first system block. `cch` rotates every request.
+    return {
+        "type": "text",
+        "text": f"x-anthropic-billing-header: cc_version=2.1.177.282; cc_entrypoint=sdk-ts; cch={cch};",
+    }
+
+
+def test_convert_request_anthropic_to_openai_responses_strips_sdk_billing_system_block():
+    # The Claude Agent SDK prepends an `x-anthropic-billing-header` system block whose `cch=` token
+    # rotates every request. Concatenated into the OpenAI Responses `instructions` prefix it lands at
+    # byte 0 of OpenAI's prompt-cache prefix and defeats caching on every call. Drop it OpenAI-bound.
+    _path, out_body = convert_request_for_supplier(
+        request_protocol="anthropic",
+        supplier_protocol="openai_responses",
+        path="/v1/messages",
+        body={
+            "model": "any",
+            "system": [
+                _billing_block("7d762"),
+                {"type": "text", "text": _REAL_SYSTEM_TEXT},
+            ],
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 16,
+        },
+        target_model="gpt-5.4",
+    )
+
+    assert "x-anthropic-billing-header" not in out_body["instructions"]
+    assert "cch=" not in out_body["instructions"]
+    assert _REAL_SYSTEM_TEXT in out_body["instructions"]
+
+
+def test_convert_request_anthropic_to_openai_chat_strips_sdk_billing_system_block():
+    _path, out_body = convert_request_for_supplier(
+        request_protocol="anthropic",
+        supplier_protocol="openai",
+        path="/v1/messages",
+        body={
+            "model": "any",
+            "system": [
+                _billing_block("9bcd3"),
+                {"type": "text", "text": _REAL_SYSTEM_TEXT},
+            ],
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 16,
+        },
+        target_model="gpt-5.4",
+    )
+
+    system_text = json.dumps(out_body["messages"][0]["content"])
+    assert "x-anthropic-billing-header" not in system_text
+    assert _REAL_SYSTEM_TEXT in system_text
+
+
+def test_convert_request_anthropic_to_anthropic_keeps_sdk_billing_system_block():
+    # An anthropic-protocol supplier consumes its own billing marker server-side, so keep it intact —
+    # stripping is only for OpenAI-bound conversions where the rotating token poisons the cache prefix.
+    _path, out_body = convert_request_for_supplier(
+        request_protocol="anthropic",
+        supplier_protocol="anthropic",
+        path="/v1/messages",
+        body={
+            "model": "any",
+            "system": [
+                _billing_block("c75ca"),
+                {"type": "text", "text": _REAL_SYSTEM_TEXT},
+            ],
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 16,
+        },
+        target_model="claude-opus-4-7",
+    )
+
+    assert "x-anthropic-billing-header" in json.dumps(out_body.get("system"))
 
 
 def test_convert_request_openai_to_anthropic_maps_reasoning_effort():
@@ -543,11 +623,11 @@ async def test_convert_request_anthropic_to_openai_preserves_tools():
             ],
             "tool_choice": {"type": "tool", "name": "get_weather"},
         },
-        target_model="gpt-4o-mini",
+        target_model="gpt-5.4",
     )
 
     assert path == "/v1/chat/completions"
-    assert out_body["model"] == "gpt-4o-mini"
+    assert out_body["model"] == "gpt-5.4"
     assert isinstance(out_body.get("tools"), list)
     assert out_body["tools"][0]["type"] == "function"
     assert out_body["tools"][0]["function"]["name"] == "get_weather"
@@ -590,11 +670,11 @@ async def test_convert_request_anthropic_to_openai_preserves_tool_calls():
             ],
             "max_tokens": 16,
         },
-        target_model="gpt-4o-mini",
+        target_model="gpt-5.4",
     )
 
     assert path == "/v1/chat/completions"
-    assert out_body["model"] == "gpt-4o-mini"
+    assert out_body["model"] == "gpt-5.4"
     assert out_body["messages"][0]["role"] == "assistant"
     assert out_body["messages"][0]["tool_calls"][0]["id"] == "toolu_123"
     assert out_body["messages"][0]["tool_calls"][0]["function"]["name"] == "get_weather"
@@ -617,7 +697,7 @@ def test_convert_response_openai_to_anthropic():
             "id": "chatcmpl-1",
             "object": "chat.completion",
             "created": 1,
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.4",
             "choices": [
                 {
                     "index": 0,
@@ -639,7 +719,7 @@ def test_convert_response_anthropic_to_openai():
     converted = convert_response_for_user(
         request_protocol="openai",
         supplier_protocol="anthropic",
-        target_model="gpt-4o-mini",
+        target_model="gpt-5.4",
         body={
             "id": "msg_1",
             "type": "message",
@@ -735,12 +815,12 @@ def test_convert_response_openai_responses_to_openai():
     converted = convert_response_for_user(
         request_protocol="openai",
         supplier_protocol="openai_responses",
-        target_model="gpt-4o-mini",
+        target_model="gpt-5.4",
         body={
             "id": "resp_1",
             "object": "response",
             "created_at": 123,
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.4",
             "output": [
                 {
                     "id": "msg_1",
@@ -907,14 +987,14 @@ async def test_convert_stream_openai_to_anthropic():
         "id": "chatcmpl-1",
         "object": "chat.completion.chunk",
         "created": 1,
-        "model": "gpt-4o-mini",
+        "model": "gpt-5.4",
         "choices": [{"index": 0, "delta": {"content": "Hi"}, "finish_reason": None}],
     }
     chunk_2 = {
         "id": "chatcmpl-1",
         "object": "chat.completion.chunk",
         "created": 1,
-        "model": "gpt-4o-mini",
+        "model": "gpt-5.4",
         "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
     }
     upstream = _agen(
@@ -984,7 +1064,7 @@ async def test_convert_stream_anthropic_to_openai():
         request_protocol="openai",
         supplier_protocol="anthropic",
         upstream=upstream,
-        model="gpt-4o-mini",
+        model="gpt-5.4",
     ):
         payloads.extend(decoder.feed(c))
 
@@ -1044,7 +1124,7 @@ async def test_convert_stream_anthropic_to_openai_includes_usage():
         request_protocol="openai",
         supplier_protocol="anthropic",
         upstream=upstream,
-        model="gpt-4o-mini",
+        model="gpt-5.4",
     ):
         payloads.extend(decoder.feed(c))
 
@@ -1084,7 +1164,7 @@ async def test_convert_stream_openai_responses_to_openai():
                 "id": "resp_1",
                 "object": "response",
                 "created_at": 1,
-                "model": "gpt-4o-mini",
+                "model": "gpt-5.4",
             },
         },
         {"type": "response.output_text.delta", "delta": "Hi"},
@@ -1098,7 +1178,7 @@ async def test_convert_stream_openai_responses_to_openai():
         request_protocol="openai",
         supplier_protocol="openai_responses",
         upstream=upstream,
-        model="gpt-4o-mini",
+        model="gpt-5.4",
     ):
         payloads.extend(decoder.feed(c))
 
@@ -1124,7 +1204,7 @@ def test_convert_request_strips_stream_options_when_target_is_openai():
             "stream": True,
             "stream_options": {"include_usage": True},
         },
-        target_model="gpt-4o-mini",
+        target_model="gpt-5.4",
     )
 
     assert "stream_options" not in out_body
@@ -1147,7 +1227,7 @@ def test_convert_request_strips_include_usage_when_target_is_openai():
             "stream": True,
             "include_usage": True,
         },
-        target_model="gpt-4o-mini",
+        target_model="gpt-5.4",
     )
 
     assert "include_usage" not in out_body
@@ -1167,7 +1247,7 @@ def test_convert_request_strips_stream_options_when_target_is_openai_responses()
             "stream": True,
             "stream_options": {"include_usage": True},
         },
-        target_model="gpt-4o-mini",
+        target_model="gpt-5.4",
     )
 
     assert "stream_options" not in out_body
@@ -1187,7 +1267,7 @@ def test_convert_request_strips_include_usage_when_target_is_openai_responses():
             "stream": True,
             "include_usage": True,
         },
-        target_model="gpt-4o-mini",
+        target_model="gpt-5.4",
     )
 
     assert "include_usage" not in out_body
@@ -1212,7 +1292,7 @@ def test_convert_request_strips_stream_options_same_protocol_openai():
             "stream_options": {"include_usage": True},
             "include_usage": True,
         },
-        target_model="gpt-4o-mini",
+        target_model="gpt-5.4",
     )
 
     assert "stream_options" not in out_body
@@ -1315,9 +1395,9 @@ async def test_convert_stream_openai_to_anthropic_multiple_tool_calls_without_in
         if e.get("type") == "content_block_start"
         and e.get("content_block", {}).get("type") == "tool_use"
     ]
-    assert (
-        len(tool_use_starts) == 2
-    ), f"Expected 2 tool_use content_block_start events, got {len(tool_use_starts)}"
+    assert len(tool_use_starts) == 2, (
+        f"Expected 2 tool_use content_block_start events, got {len(tool_use_starts)}"
+    )
 
     # Verify each tool has correct id
     tool_ids = [e["content_block"]["id"] for e in tool_use_starts]
@@ -1336,9 +1416,9 @@ async def test_convert_stream_openai_to_anthropic_multiple_tool_calls_without_in
         if e.get("type") == "content_block_delta"
         and e.get("delta", {}).get("type") == "input_json_delta"
     ]
-    assert (
-        len(json_deltas) == 2
-    ), f"Expected 2 input_json_delta events, got {len(json_deltas)}"
+    assert len(json_deltas) == 2, (
+        f"Expected 2 input_json_delta events, got {len(json_deltas)}"
+    )
 
     # Verify the deltas have different indices (0 and 1)
     delta_indices = [e["index"] for e in json_deltas]
@@ -1347,9 +1427,9 @@ async def test_convert_stream_openai_to_anthropic_multiple_tool_calls_without_in
 
     # Count content_block_stop events
     block_stops = [e for e in events if e.get("type") == "content_block_stop"]
-    assert (
-        len(block_stops) == 2
-    ), f"Expected 2 content_block_stop events, got {len(block_stops)}"
+    assert len(block_stops) == 2, (
+        f"Expected 2 content_block_stop events, got {len(block_stops)}"
+    )
 
 
 class TestImageDefaultResponseFormat:
@@ -1410,8 +1490,8 @@ class TestImageDefaultResponseFormat:
             request_protocol="openai",
             supplier_protocol="openai",
             path="/v1/chat/completions",
-            body={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
-            target_model="gpt-4",
+            body={"model": "gpt-5.4", "messages": [{"role": "user", "content": "hi"}]},
+            target_model="gpt-5.4",
         )
         assert "response_format" not in body
 
@@ -1422,7 +1502,7 @@ def test_convert_request_openai_to_gemini_chat():
         supplier_protocol="gemini",
         path="/v1/chat/completions",
         body={
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.4",
             "messages": [{"role": "user", "content": "Hello Gemini"}],
             "max_tokens": 64,
         },
@@ -1440,7 +1520,7 @@ def test_convert_request_openai_to_gemini_preserves_tool_response_name():
         supplier_protocol="gemini",
         path="/v1/chat/completions",
         body={
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.4",
             "messages": [
                 {"role": "user", "content": "Run ls"},
                 {
@@ -1452,7 +1532,7 @@ def test_convert_request_openai_to_gemini_preserves_tool_response_name():
                             "type": "function",
                             "function": {
                                 "name": "exec",
-                                "arguments": "{\"command\":\"ls\"}",
+                                "arguments": '{"command":"ls"}',
                             },
                         }
                     ],
@@ -1470,9 +1550,7 @@ def test_convert_request_openai_to_gemini_preserves_tool_response_name():
     assert out_body["contents"][1]["role"] == "model"
     assert out_body["contents"][1]["parts"][0]["functionCall"]["name"] == "exec"
     assert out_body["contents"][2]["role"] == "user"
-    assert (
-        out_body["contents"][2]["parts"][0]["functionResponse"]["name"] == "exec"
-    )
+    assert out_body["contents"][2]["parts"][0]["functionResponse"]["name"] == "exec"
     assert out_body["contents"][2]["parts"][0]["functionResponse"]["id"] == "call_123"
 
 
@@ -1482,7 +1560,7 @@ def test_convert_request_openai_to_gemini_omits_empty_tool_parameters():
         supplier_protocol="gemini",
         path="/v1/chat/completions",
         body={
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.4",
             "messages": [{"role": "user", "content": "List agents"}],
             "tools": [
                 {
@@ -1490,7 +1568,11 @@ def test_convert_request_openai_to_gemini_omits_empty_tool_parameters():
                     "function": {
                         "name": "agents_list",
                         "description": "List agents",
-                        "parameters": {"type": "object", "properties": {}, "required": []},
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "required": [],
+                        },
                     },
                 }
             ],
@@ -1509,7 +1591,7 @@ def test_convert_request_openai_to_gemini_strips_unsupported_tool_schema_keyword
         supplier_protocol="gemini",
         path="/v1/chat/completions",
         body={
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.4",
             "messages": [{"role": "user", "content": "Check tool schemas"}],
             "tools": [
                 {
@@ -1525,9 +1607,7 @@ def test_convert_request_openai_to_gemini_strips_unsupported_tool_schema_keyword
                                 "env": {
                                     "type": "object",
                                     "propertyNames": {"type": "string"},
-                                    "patternProperties": {
-                                        "^(.*)$": {"type": "string"}
-                                    },
+                                    "patternProperties": {"^(.*)$": {"type": "string"}},
                                 },
                                 "timeout": {
                                     "type": "integer",
@@ -1587,10 +1667,9 @@ def test_convert_request_openai_to_gemini_strips_unsupported_tool_schema_keyword
     assert exec_params["properties"]["env"] == {"type": "object"}
     assert exec_params["properties"]["timeout"] == {"type": "integer"}
     assert browser_params["properties"]["fields"]["items"] == {"type": "object"}
-    assert (
-        browser_params["properties"]["request"]["properties"]["fields"]["items"]
-        == {"type": "object"}
-    )
+    assert browser_params["properties"]["request"]["properties"]["fields"]["items"] == {
+        "type": "object"
+    }
 
 
 def test_convert_request_openai_to_gemini_strips_unsupported_response_schema_keywords():
@@ -1599,7 +1678,7 @@ def test_convert_request_openai_to_gemini_strips_unsupported_response_schema_key
         supplier_protocol="gemini",
         path="/v1/chat/completions",
         body={
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.4",
             "messages": [{"role": "user", "content": "Return JSON"}],
             "response_format": {
                 "type": "json_schema",
@@ -1610,9 +1689,7 @@ def test_convert_request_openai_to_gemini_strips_unsupported_response_schema_key
                         "properties": {
                             "env": {
                                 "type": "object",
-                                "patternProperties": {
-                                    "^(.*)$": {"type": "string"}
-                                },
+                                "patternProperties": {"^(.*)$": {"type": "string"}},
                             }
                         },
                     }
@@ -1725,7 +1802,10 @@ def test_convert_response_gemini_to_openai_chat():
             "responseId": "resp-1",
             "candidates": [
                 {
-                    "content": {"role": "model", "parts": [{"text": "Hello from Gemini"}]},
+                    "content": {
+                        "role": "model",
+                        "parts": [{"text": "Hello from Gemini"}],
+                    },
                     "finishReason": "STOP",
                     "index": 0,
                 }
@@ -1782,12 +1862,8 @@ def test_convert_response_gemini_to_openai_images():
                 "promptTokenCount": 6,
                 "candidatesTokenCount": 1220,
                 "totalTokenCount": 1377,
-                "promptTokensDetails": [
-                    {"modality": "TEXT", "tokenCount": 6}
-                ],
-                "candidatesTokensDetails": [
-                    {"modality": "IMAGE", "tokenCount": 1120}
-                ],
+                "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 6}],
+                "candidatesTokensDetails": [{"modality": "IMAGE", "tokenCount": 1120}],
                 "thoughtsTokenCount": 151,
             },
         },
@@ -1889,7 +1965,8 @@ async def test_convert_stream_gemini_to_anthropic():
     assert "message_stop" in event_types
     # Verify text content arrived
     text_deltas = [
-        e for e in events
+        e
+        for e in events
         if e.get("type") == "content_block_delta"
         and e.get("delta", {}).get("type") == "text_delta"
     ]
@@ -2026,7 +2103,10 @@ def test_convert_response_gemini_to_anthropic():
             "responseId": "resp-1",
             "candidates": [
                 {
-                    "content": {"role": "model", "parts": [{"text": "Hello from Gemini"}]},
+                    "content": {
+                        "role": "model",
+                        "parts": [{"text": "Hello from Gemini"}],
+                    },
                     "finishReason": "STOP",
                     "index": 0,
                 }

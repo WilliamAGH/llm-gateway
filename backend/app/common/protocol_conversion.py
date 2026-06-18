@@ -93,6 +93,7 @@ def normalize_protocol(protocol: str) -> str:
 _IMAGE_PATHS = {"/v1/images/generations", "/v1/images/edits", "/v1/images/variations"}
 _LEGACY_IMAGE_RESPONSE_FORMAT_MODELS = {"dall-e-2", "dall-e-3"}
 _OPENAI_USER_IDENTIFIER_MAX_LENGTH = 64
+_ANTHROPIC_BILLING_SYSTEM_PREFIX = "x-anthropic-billing-header:"
 
 
 def _apply_image_defaults(path: str, body: dict[str, Any], target_model: str) -> None:
@@ -117,8 +118,39 @@ def _normalize_openai_user_identifier(body: dict[str, Any]) -> None:
     metadata = body.get("metadata")
     if isinstance(metadata, dict):
         user_id = metadata.get("user_id")
-        if isinstance(user_id, str) and len(user_id) > _OPENAI_USER_IDENTIFIER_MAX_LENGTH:
+        if (
+            isinstance(user_id, str)
+            and len(user_id) > _OPENAI_USER_IDENTIFIER_MAX_LENGTH
+        ):
             metadata["user_id"] = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
+
+
+def _strip_anthropic_billing_system_blocks(body: dict[str, Any]) -> dict[str, Any]:
+    """Drop the Claude Agent SDK's ``x-anthropic-billing-header`` system block for OpenAI-bound traffic.
+
+    The SDK prepends an Anthropic-internal billing/telemetry marker as the first ``system`` text block,
+    carrying a ``cch=`` token that rotates every request. Anthropic consumes it server-side, but a
+    conversion to an OpenAI(/Responses) supplier merges every system block into the ``instructions``
+    prefix, so the rotating token lands at byte 0 of OpenAI's prompt-cache prefix and defeats caching on
+    every call (``cached_tokens`` stays 0 even on a 300k-token prompt). The marker carries no instruction
+    value for an OpenAI model, so strip it from the source ``system`` list before conversion. Returns a
+    shallow copy when a block is removed; the original body otherwise (so the Anthropic path is untouched).
+    """
+    system = body.get("system")
+    if not isinstance(system, list):
+        return body
+    kept = [
+        block
+        for block in system
+        if not (
+            isinstance(block, dict)
+            and isinstance(block.get("text"), str)
+            and block["text"].lstrip().startswith(_ANTHROPIC_BILLING_SYSTEM_PREFIX)
+        )
+    ]
+    if len(kept) == len(system):
+        return body
+    return {**body, "system": kept}
 
 
 def convert_request_for_supplier(
@@ -158,12 +190,22 @@ def convert_request_for_supplier(
         request_protocol = normalize_protocol(request_protocol)
         supplier_protocol = normalize_protocol(supplier_protocol)
 
+        # Strip the Claude Agent SDK's rotating `x-anthropic-billing-header` system block before an
+        # OpenAI-bound conversion folds it into the (otherwise stable) instructions prefix and poisons
+        # OpenAI prompt caching. Anthropic-bound traffic keeps it (the upstream consumes it).
+        source_body = body
+        if request_protocol == ANTHROPIC_PROTOCOL and supplier_protocol in (
+            OPENAI_PROTOCOL,
+            OPENAI_RESPONSES_PROTOCOL,
+        ):
+            source_body = _strip_anthropic_billing_system_blocks(body)
+
         # Use new conversion module
         result = _convert_request(
             source_protocol=request_protocol,
             target_protocol=supplier_protocol,
             path=path,
-            body=body,
+            body=source_body,
             target_model=target_model,
             options=options,
         )
