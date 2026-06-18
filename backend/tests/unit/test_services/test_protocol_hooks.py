@@ -62,6 +62,48 @@ class RecordingAffinityStrategy(SelectionStrategy):
         return None
 
 
+def _kimi_model_mapping() -> ModelMapping:
+    now = utc_now()
+    return ModelMapping(
+        requested_model="researchly-code",
+        strategy="prefix_affinity",
+        matching_rules=None,
+        capabilities=None,
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _kimi_candidate() -> CandidateProvider:
+    return CandidateProvider(
+        provider_id=1,
+        provider_name="kimi-code-plan",
+        base_url="https://api.kimi.com/coding/v1",
+        protocol="openai",
+        api_key="sk-test",
+        target_model="kimi-for-coding",
+        priority=0,
+        weight=1,
+    )
+
+
+def _kimi_proxy_service(
+    affinity_strategy: RecordingAffinityStrategy,
+) -> ProxyService:
+    service = ProxyService(
+        model_repo=AsyncMock(),
+        provider_repo=AsyncMock(),
+        log_repo=AsyncMock(),
+        prefix_affinity_strategy=affinity_strategy,
+        protocol_hooks=ProtocolConversionHooks(),
+    )
+    service._resolve_candidates = AsyncMock(
+        return_value=(_kimi_model_mapping(), [_kimi_candidate()], 2048, "openai", {})
+    )
+    return service
+
+
 class ImageHooks(ProtocolConversionHooks):
     async def before_image_request_conversion(
         self, body, request_protocol, supplier_protocol, path
@@ -250,37 +292,8 @@ async def test_protocol_hooks_apply_to_image_non_stream_flow():
 
 @pytest.mark.asyncio
 async def test_kimi_request_without_client_key_derives_prompt_cache_key_for_forwarding_and_affinity():
-    now = utc_now()
-    model_mapping = ModelMapping(
-        requested_model="researchly-code",
-        strategy="prefix_affinity",
-        matching_rules=None,
-        capabilities=None,
-        is_active=True,
-        created_at=now,
-        updated_at=now,
-    )
-    candidate = CandidateProvider(
-        provider_id=1,
-        provider_name="kimi-code-plan",
-        base_url="https://api.kimi.com/coding/v1",
-        protocol="openai",
-        api_key="sk-test",
-        target_model="kimi-for-coding",
-        priority=0,
-        weight=1,
-    )
     affinity_strategy = RecordingAffinityStrategy()
-    service = ProxyService(
-        model_repo=AsyncMock(),
-        provider_repo=AsyncMock(),
-        log_repo=AsyncMock(),
-        prefix_affinity_strategy=affinity_strategy,
-        protocol_hooks=ProtocolConversionHooks(),
-    )
-    service._resolve_candidates = AsyncMock(
-        return_value=(model_mapping, [candidate], 2048, "openai", {})
-    )
+    service = _kimi_proxy_service(affinity_strategy)
     captured: dict[str, dict] = {}
     original_body = {
         "model": "researchly-code",
@@ -339,37 +352,8 @@ async def test_kimi_request_without_client_key_derives_prompt_cache_key_for_forw
 
 @pytest.mark.asyncio
 async def test_kimi_stream_request_without_client_key_derives_prompt_cache_key_for_forwarding_and_affinity():
-    now = utc_now()
-    model_mapping = ModelMapping(
-        requested_model="researchly-code",
-        strategy="prefix_affinity",
-        matching_rules=None,
-        capabilities=None,
-        is_active=True,
-        created_at=now,
-        updated_at=now,
-    )
-    candidate = CandidateProvider(
-        provider_id=1,
-        provider_name="kimi-code-plan",
-        base_url="https://api.kimi.com/coding/v1",
-        protocol="openai",
-        api_key="sk-test",
-        target_model="kimi-for-coding",
-        priority=0,
-        weight=1,
-    )
     affinity_strategy = RecordingAffinityStrategy()
-    service = ProxyService(
-        model_repo=AsyncMock(),
-        provider_repo=AsyncMock(),
-        log_repo=AsyncMock(),
-        prefix_affinity_strategy=affinity_strategy,
-        protocol_hooks=ProtocolConversionHooks(),
-    )
-    service._resolve_candidates = AsyncMock(
-        return_value=(model_mapping, [candidate], 2048, "openai", {})
-    )
+    service = _kimi_proxy_service(affinity_strategy)
     captured: dict[str, dict] = {}
     original_body = {
         "model": "researchly-code",
