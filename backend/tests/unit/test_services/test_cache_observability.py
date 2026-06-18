@@ -259,6 +259,16 @@ class TestExactResponseCache:
         assert with_usage["usage"]["cache_read_input_tokens"] == 5282
         assert "cache_read_input_tokens" not in body["usage"]
 
+    def test_gateway_cache_hit_uses_provider_input_count_over_estimate(self):
+        body = {
+            "type": "message",
+            "usage": {"input_tokens": 5282, "output_tokens": 5},
+        }
+
+        with_usage = _body_with_gateway_response_cache_usage(body, 5420)
+
+        assert with_usage["usage"]["cache_read_input_tokens"] == 5282
+
     def test_gateway_cache_hit_marks_openai_responses_usage_as_cached(self):
         body = {
             "object": "response",

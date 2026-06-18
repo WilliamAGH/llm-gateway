@@ -284,8 +284,8 @@ def _provider_response_from_exact_cache(value: str, elapsed_ms: int) -> Optional
 def _body_with_gateway_response_cache_usage(
     body: Any, input_tokens: Optional[int]
 ) -> Any:
-    cached_tokens = int(input_tokens or 0)
-    if cached_tokens <= 0 or not isinstance(body, dict):
+    estimated_cached_tokens = int(input_tokens or 0)
+    if estimated_cached_tokens <= 0 or not isinstance(body, dict):
         return body
     usage = body.get("usage")
     if not isinstance(usage, dict):
@@ -293,6 +293,14 @@ def _body_with_gateway_response_cache_usage(
 
     updated_body = dict(body)
     updated_usage = dict(usage)
+    reported_input_tokens = (
+        updated_usage.get("prompt_tokens")
+        or updated_usage.get("input_tokens")
+        or estimated_cached_tokens
+    )
+    cached_tokens = min(estimated_cached_tokens, int(reported_input_tokens or 0))
+    if cached_tokens <= 0:
+        return body
     if "prompt_tokens" in updated_usage:
         details = updated_usage.get("prompt_tokens_details")
         updated_usage["prompt_tokens_details"] = {
