@@ -150,17 +150,10 @@ function resolveOriginalRequestUrl(
   }
 }
 
-function positiveTokenCount(value: number | null | undefined): number {
-  return typeof value === "number" && value > 0 ? value : 0;
-}
-
-function cacheReadTokens(log: RequestLogDetail | null): number {
-  const details = log?.usage_details;
-  if (!details) return 0;
-  return (
-    positiveTokenCount(details.cache_read_input_tokens) ||
-    positiveTokenCount(details.cached_tokens)
-  );
+interface CacheMetricState {
+  value: string;
+  title: string;
+  className: string;
 }
 
 function costTooltip(log: RequestLogDetail): string {
@@ -234,7 +227,69 @@ export function LogDetail({ log }: LogDetailProps) {
       ),
     [clientOrigin, log?.request_headers, log?.request_path, log?.request_url],
   );
-  const cacheReadTokenCount = useMemo(() => cacheReadTokens(log), [log]);
+
+  const cacheWriteMetric = useMemo<CacheMetricState>(() => {
+    const details = log?.usage_details;
+    if (!details) {
+      return {
+        value: t("detail.tokenUsage.notAvailable"),
+        title: t("detail.tokenUsage.noUsageTooltip"),
+        className: "font-medium text-muted-foreground text-xs text-right",
+      };
+    }
+
+    const value = details.cache_creation_input_tokens;
+    if (typeof value === "number") {
+      return {
+        value: value.toLocaleString(),
+        title:
+          value > 0
+            ? t("detail.tokenUsage.cacheWriteHitTooltip")
+            : t("detail.tokenUsage.cacheWriteZeroTooltip"),
+        className:
+          value > 0 ? "font-medium text-emerald-500" : "font-medium",
+      };
+    }
+
+    return {
+      value: t("detail.tokenUsage.notReported"),
+      title: t("detail.tokenUsage.cacheWriteNotReportedTooltip"),
+      className: "font-medium text-muted-foreground text-xs text-right",
+    };
+  }, [log?.usage_details, t]);
+
+  const cacheReadMetric = useMemo<CacheMetricState>(() => {
+    const details = log?.usage_details;
+    if (!details) {
+      return {
+        value: t("detail.tokenUsage.notAvailable"),
+        title: t("detail.tokenUsage.noUsageTooltip"),
+        className: "font-medium text-muted-foreground text-xs text-right",
+      };
+    }
+
+    const value =
+      typeof details.cache_read_input_tokens === "number"
+        ? details.cache_read_input_tokens
+        : details.cached_tokens;
+    if (typeof value === "number") {
+      return {
+        value: value.toLocaleString(),
+        title:
+          value > 0
+            ? t("detail.tokenUsage.cacheReadHitTooltip")
+            : t("detail.tokenUsage.cacheReadZeroTooltip"),
+        className:
+          value > 0 ? "font-medium text-emerald-500" : "font-medium",
+      };
+    }
+
+    return {
+      value: t("detail.tokenUsage.notReported"),
+      title: t("detail.tokenUsage.cacheReadNotReportedTooltip"),
+      className: "font-medium text-muted-foreground text-xs text-right",
+    };
+  }, [log?.usage_details, t]);
 
   // Token usage details - only show fields with non-zero values
   const tokenUsageItems = useMemo(() => {
@@ -729,7 +784,7 @@ export function LogDetail({ log }: LogDetailProps) {
             <div className="mb-2 text-sm font-medium">
               {t("detail.metrics")}
             </div>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-4 xl:grid-cols-8">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-4 xl:grid-cols-9">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-muted-foreground">
                   {t("detail.ttfb")}
@@ -754,19 +809,24 @@ export function LogDetail({ log }: LogDetailProps) {
               </div>
               <div
                 className="flex items-center justify-between gap-2"
-                title="Cache Read"
+                title={cacheWriteMetric.title}
+              >
+                <span className="text-muted-foreground">
+                  {t("detail.tokenUsage.cacheWrite")}
+                </span>
+                <span className={cacheWriteMetric.className}>
+                  {cacheWriteMetric.value}
+                </span>
+              </div>
+              <div
+                className="flex items-center justify-between gap-2"
+                title={cacheReadMetric.title}
               >
                 <span className="text-muted-foreground">
                   {t("detail.tokenUsage.cacheRead")}
                 </span>
-                <span
-                  className={
-                    cacheReadTokenCount > 0
-                      ? "font-medium text-emerald-500"
-                      : "font-medium"
-                  }
-                >
-                  {cacheReadTokenCount.toLocaleString()}
+                <span className={cacheReadMetric.className}>
+                  {cacheReadMetric.value}
                 </span>
               </div>
               <div className="flex items-center justify-between gap-2">
