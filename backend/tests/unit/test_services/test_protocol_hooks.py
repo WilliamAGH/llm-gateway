@@ -104,6 +104,54 @@ def _kimi_proxy_service(
     return service
 
 
+def _gpt_responses_model_mapping() -> ModelMapping:
+    now = utc_now()
+    return ModelMapping(
+        requested_model="gpt-5.4",
+        strategy="prefix_affinity",
+        matching_rules=None,
+        capabilities=None,
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _gpt_responses_candidate() -> CandidateProvider:
+    return CandidateProvider(
+        provider_id=14,
+        provider_name="OpenAI Responses (direct)",
+        base_url="https://api.openai.com/v1",
+        protocol="openai_responses",
+        api_key="sk-test",
+        target_model="gpt-5.4",
+        priority=0,
+        weight=1,
+    )
+
+
+def _gpt_responses_proxy_service(
+    affinity_strategy: RecordingAffinityStrategy,
+) -> ProxyService:
+    service = ProxyService(
+        model_repo=AsyncMock(),
+        provider_repo=AsyncMock(),
+        log_repo=AsyncMock(),
+        prefix_affinity_strategy=affinity_strategy,
+        protocol_hooks=ProtocolConversionHooks(),
+    )
+    service._resolve_candidates = AsyncMock(
+        return_value=(
+            _gpt_responses_model_mapping(),
+            [_gpt_responses_candidate()],
+            2048,
+            "anthropic",
+            {},
+        )
+    )
+    return service
+
+
 class ImageHooks(ProtocolConversionHooks):
     async def before_image_request_conversion(
         self, body, request_protocol, supplier_protocol, path
@@ -404,6 +452,81 @@ async def test_kimi_stream_request_without_client_key_derives_prompt_cache_key_f
     assert initial_response.status_code == 200
     assert chunks == [b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n']
     assert prompt_cache_key.startswith("llmgw:kimi:")
+    assert captured["conversion_body"]["prompt_cache_key"] == prompt_cache_key
+    assert affinity_strategy.affinity_keys == [prompt_cache_key]
+    assert "prompt_cache_key" not in original_body
+    service.log_repo.create.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_gpt5_messages_request_derives_prompt_cache_key_for_openai_responses_provider():
+    affinity_strategy = RecordingAffinityStrategy()
+    service = _gpt_responses_proxy_service(affinity_strategy)
+    captured: dict[str, dict] = {}
+    original_body = {
+        "model": "gpt-5.4",
+        "system": [
+            {
+                "type": "text",
+                "text": "stable prefix " * 900,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    def fake_convert_request_for_supplier(*, body, **kwargs):
+        captured["conversion_body"] = body
+        return "/v1/responses", {"converted": True}
+
+    def fake_convert_response_for_user(**kwargs):
+        return kwargs["body"]
+
+    async def forward(*, body: dict, **kwargs):
+        captured["forwarded_body"] = body
+        return ProviderResponse(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body={
+                "id": "resp_test",
+                "output": [],
+                "usage": {
+                    "input_tokens": 2048,
+                    "output_tokens": 1,
+                    "total_tokens": 2049,
+                    "input_tokens_details": {"cached_tokens": 0},
+                },
+            },
+        )
+
+    fake_client = AsyncMock()
+    fake_client.forward = AsyncMock(side_effect=forward)
+
+    with patch(
+        "app.services.proxy_service.convert_request_for_supplier",
+        side_effect=fake_convert_request_for_supplier,
+    ):
+        with patch(
+            "app.services.proxy_service.convert_response_for_user",
+            side_effect=fake_convert_response_for_user,
+        ):
+            with patch(
+                "app.services.proxy_service.get_provider_client",
+                return_value=fake_client,
+            ):
+                await service.process_request(
+                    api_key_id=1,
+                    api_key_name="k",
+                    request_protocol="anthropic",
+                    path="/v1/messages",
+                    request_url="/v1/messages",
+                    method="POST",
+                    headers={},
+                    body=original_body,
+                )
+
+    prompt_cache_key = captured["forwarded_body"]["prompt_cache_key"]
+    assert prompt_cache_key.startswith("llmgw:openai:")
     assert captured["conversion_body"]["prompt_cache_key"] == prompt_cache_key
     assert affinity_strategy.affinity_keys == [prompt_cache_key]
     assert "prompt_cache_key" not in original_body

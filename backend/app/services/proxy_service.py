@@ -70,12 +70,19 @@ def _non_empty_prompt_cache_key(body: Any) -> Optional[str]:
     return key if isinstance(key, str) and key.strip() else None
 
 
-def _is_kimi_prompt_cache_target(*values: Any) -> bool:
-    markers = ("kimi", "moonshot", "api.kimi.com", "api.moonshot.ai")
-    return any(
-        any(marker in value.lower() for marker in markers)
-        for value in (str(v) for v in values if v is not None)
-    )
+def _prompt_cache_namespace(*values: Any) -> Optional[str]:
+    """Sole owner of prompt-cache target detection: maps request values (models, base_url)
+    to the namespace that seeds the cache key, or None when no target matches."""
+    lowered = [str(v).lower() for v in values if v is not None]
+    kimi_markers = ("kimi", "moonshot", "api.kimi.com", "api.moonshot.ai")
+    if any(marker in value for value in lowered for marker in kimi_markers):
+        return "kimi"
+    if any(
+        value.startswith("gpt-") and not value.startswith("gpt-oss")
+        for value in lowered
+    ):
+        return "openai"
+    return None
 
 
 def _prompt_cache_prefix(body: dict[str, Any]) -> str:
@@ -102,7 +109,8 @@ def _prompt_cache_key_for_request(
     if not isinstance(body, dict):
         return None
     targets = [requested_model, *(target_model or [])]
-    if not _is_kimi_prompt_cache_target(*targets):
+    namespace = _prompt_cache_namespace(*targets)
+    if namespace is None:
         return None
     seed = json.dumps(
         {"model": requested_model, "prefix": _prompt_cache_prefix(body)},
@@ -110,7 +118,7 @@ def _prompt_cache_key_for_request(
         sort_keys=True,
         separators=(",", ":"),
     )
-    return f"llmgw:kimi:{hashlib.sha256(seed.encode('utf-8')).hexdigest()[:24]}"
+    return f"llmgw:{namespace}:{hashlib.sha256(seed.encode('utf-8')).hexdigest()[:24]}"
 
 
 def _body_with_prompt_cache_key(body: Any, prompt_cache_key: Optional[str]) -> Any:
@@ -132,8 +140,8 @@ def _supplier_body_with_prompt_cache_key(
         not prompt_cache_key
         or not isinstance(body, dict)
         or _non_empty_prompt_cache_key(body)
-        or supplier_protocol != "openai"
-        or not _is_kimi_prompt_cache_target(requested_model, target_model, base_url)
+        or supplier_protocol not in {"openai", "openai_responses"}
+        or _prompt_cache_namespace(requested_model, target_model, base_url) is None
     ):
         return body
     return {**body, "prompt_cache_key": prompt_cache_key}

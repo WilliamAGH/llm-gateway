@@ -80,11 +80,31 @@ class TestPromptCacheKeyForRequest:
         assert key is not None
         assert key.startswith("llmgw:kimi:")
 
-    def test_does_not_derive_key_for_non_kimi_model(self):
+    def test_derives_from_gpt_prefixed_target_model(self):
         key = _prompt_cache_key_for_request(
             {"messages": [{"role": "user", "content": "hello"}]},
-            "gpt-5.4",
+            "researchly-gpt",
             ["gpt-5.4"],
+        )
+
+        assert key is not None
+        assert key.startswith("llmgw:openai:")
+
+    def test_derives_from_generic_gpt_prefixed_target_model(self):
+        key = _prompt_cache_key_for_request(
+            {"messages": [{"role": "user", "content": "hello"}]},
+            "researchly-gpt",
+            ["gpt-example"],
+        )
+
+        assert key is not None
+        assert key.startswith("llmgw:openai:")
+
+    def test_does_not_derive_key_for_local_gpt_oss_model(self):
+        key = _prompt_cache_key_for_request(
+            {"messages": [{"role": "user", "content": "hello"}]},
+            "gpt-oss-120b",
+            ["gpt-oss-120b"],
         )
 
         assert key is None
@@ -104,7 +124,7 @@ class TestPromptCacheKeyBodies:
 
         assert _body_with_prompt_cache_key(body, "derived-key") is body
 
-    def test_supplier_body_injects_only_for_openai_kimi_target(self):
+    def test_supplier_body_injects_for_openai_kimi_target(self):
         body = {"messages": [{"role": "user", "content": "hello"}]}
 
         supplier_body = _supplier_body_with_prompt_cache_key(
@@ -119,16 +139,31 @@ class TestPromptCacheKeyBodies:
         assert supplier_body == {**body, "prompt_cache_key": "derived-key"}
         assert body == {"messages": [{"role": "user", "content": "hello"}]}
 
-    def test_supplier_body_does_not_inject_for_non_kimi_or_non_openai(self):
+    def test_supplier_body_injects_for_openai_responses_gpt_prefixed_target(self):
+        body = {"input": "hello"}
+
+        supplier_body = _supplier_body_with_prompt_cache_key(
+            body,
+            "derived-key",
+            requested_model="researchly-gpt",
+            target_model="gpt-5.4",
+            base_url="https://api.openai.com/v1",
+            supplier_protocol="openai_responses",
+        )
+
+        assert supplier_body == {**body, "prompt_cache_key": "derived-key"}
+        assert body == {"input": "hello"}
+
+    def test_supplier_body_does_not_inject_for_non_cache_target_or_non_openai(self):
         body = {"messages": [{"role": "user", "content": "hello"}]}
 
         assert (
             _supplier_body_with_prompt_cache_key(
                 body,
                 "derived-key",
-                requested_model="gpt-5.4",
-                target_model="gpt-5.4",
-                base_url="https://api.openai.com/v1",
+                requested_model="gpt-oss-120b",
+                target_model="gpt-oss-120b",
+                base_url="https://api.llm-gateway.popos-sf4.com/v1",
                 supplier_protocol="openai",
             )
             is body
