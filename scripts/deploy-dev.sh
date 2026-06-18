@@ -3,10 +3,11 @@
 #
 # Builds the gateway image from origin/dev (a clean worktree, never the dirty
 # checkout), pushes it to Nexus as the mutable `dev-latest` tag plus an
-# immutable `dev-<sha>` tag, triggers the inference-network Coolify app to
-# re-pull + recreate the stack, polls the deployment to `finished`, and
-# smoke-tests two providers so a recreate that breaks provider-key decryption
-# is caught immediately.
+# immutable `dev-<sha>` tag, pulls that immutable tag onto the deploy host,
+# repoints the host-local `dev-latest` tag, triggers the inference-network
+# Coolify app to recreate the stack, verifies the running container image id,
+# and smoke-tests two providers so a recreate that breaks provider-key
+# decryption is caught immediately.
 #
 # Mirrors the repo-owned `deploy:*` convention used by the back-end / front-end /
 # researchly publish pipelines (build origin/<branch> -> push Nexus -> deploy ->
@@ -19,6 +20,7 @@ set -euo pipefail
 
 REGISTRY="docker.iocloudhost.net/researchly/llm-gateway"
 BUILDER="ci-remote"                       # native linux/amd64 builder on popos-sf4
+DEPLOY_HOST="popos-sf3.com"
 APP_UUID="bdtgxpkb79qusq5f7szgl5xw"       # squirrel-llm-gateway-with-queue (inference-network compose)
 COOLIFY="https://coolify.iocloudhost.net"
 WORKTREE="$(mktemp -d -t llm-gateway-deploy-XXXX)"
@@ -38,13 +40,22 @@ docker buildx build --builder "$BUILDER" --platform linux/amd64 \
   --push "$WORKTREE"
 echo "==> pushed ${REGISTRY}:dev-latest and :dev-${SHA}"
 
-# 3. Trigger the Coolify deploy (force => re-pull the mutable dev-latest tag).
+# 3. Bust the deploy host's mutable-tag cache before Coolify recreates the
+#    compose stack. Coolify can report a successful force deploy while Docker
+#    keeps the previous host-local dev-latest image; pulling the immutable tag
+#    first and repointing dev-latest makes the compose image reference resolve
+#    to exactly the build above.
+ssh -o BatchMode=yes "root@${DEPLOY_HOST}" \
+  "docker pull ${REGISTRY}:dev-${SHA} && docker tag ${REGISTRY}:dev-${SHA} ${REGISTRY}:dev-latest"
+echo "==> ${DEPLOY_HOST} dev-latest retagged to ${REGISTRY}:dev-${SHA}"
+
+# 4. Trigger the Coolify deploy (force => recreate against the host-local tag above).
 CK="$(doppler run -p personal -c dev -- printenv COOLIFY_API_KEY)"
 curl -fsS "${COOLIFY}/api/v1/deploy?uuid=${APP_UUID}&force=true" \
   -H "Authorization: Bearer ${CK}" >/dev/null
 echo "==> Coolify deploy queued (force re-pull)"
 
-# 4. Poll the deployment to a terminal state.
+# 5. Poll the deployment to a terminal state.
 for _ in $(seq 1 40); do
   ST="$(curl -fsS "${COOLIFY}/api/v1/deployments/applications/${APP_UUID}" \
         -H "Authorization: Bearer ${CK}" \
@@ -57,7 +68,22 @@ for _ in $(seq 1 40); do
   sleep 15
 done
 
-# 5. Smoke test: real calls prove the image is live AND the provider keys still
+# 6. Verify Coolify actually recreated from the image we just built. This catches
+#    stale mutable-tag reuse before provider smokes can produce a false green.
+EXPECTED_IMAGE="$(ssh -o BatchMode=yes "root@${DEPLOY_HOST}" \
+  "docker image inspect --format '{{.ID}}' ${REGISTRY}:dev-${SHA}")"
+RUNNING_IMAGE="$(ssh -o BatchMode=yes "root@${DEPLOY_HOST}" '
+container="$(docker ps --format "{{.Names}}" | grep "^llm-gateway-bdtgxpkb79qusq5f7szgl5xw" | head -1)"
+test -n "$container"
+docker inspect "$container" --format "{{.Image}}"
+')"
+if [[ "$RUNNING_IMAGE" != "$EXPECTED_IMAGE" ]]; then
+  echo "!! Coolify is running ${RUNNING_IMAGE}, expected ${EXPECTED_IMAGE} (${REGISTRY}:dev-${SHA})"
+  exit 1
+fi
+echo "==> running gateway image verified: ${REGISTRY}:dev-${SHA} (${RUNNING_IMAGE})"
+
+# 7. Smoke test: real calls prove the image is live AND the provider keys still
 #    decrypt after the Squirrel recreate. max_completion_tokens must be >= 16
 #    (the OpenAI Responses API rejects anything lower). The Anthropic-compatible
 #    GPT smoke covers the harness path where metadata.user_id translates to the

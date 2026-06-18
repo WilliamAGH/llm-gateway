@@ -27,7 +27,7 @@ async def test_process_request_same_protocol_response_body_passthrough_bytes():
         base_url="https://example.com",
         protocol="openai",
         api_key="sk-test",
-        target_model="gpt-4o-mini",
+        target_model="gpt-5.4-mini",
         priority=0,
         weight=1,
     )
@@ -53,7 +53,7 @@ async def test_process_request_same_protocol_response_body_passthrough_bytes():
     with patch("app.services.proxy_service.get_provider_client", return_value=fake_client):
         with patch(
             "app.services.proxy_service.convert_request_for_supplier",
-            return_value=("/v1/chat/completions", {"model": "gpt-4o-mini", "messages": []}),
+            return_value=("/v1/chat/completions", {"model": "gpt-5.4-mini", "messages": []}),
         ):
             with patch(
                 "app.services.proxy_service.convert_response_for_user",
@@ -96,7 +96,7 @@ async def test_process_request_logs_normalized_upstream_url():
         base_url="https://sub2api.fallout.in/v1",
         protocol="openai",
         api_key="sk-test",
-        target_model="gpt-4o-mini",
+        target_model="gpt-5.4-mini",
         priority=0,
         weight=1,
     )
@@ -120,7 +120,7 @@ async def test_process_request_logs_normalized_upstream_url():
     with patch("app.services.proxy_service.get_provider_client", return_value=fake_client):
         with patch(
             "app.services.proxy_service.convert_request_for_supplier",
-            return_value=("/v1/chat/completions", {"model": "gpt-4o-mini", "messages": []}),
+            return_value=("/v1/chat/completions", {"model": "gpt-5.4-mini", "messages": []}),
         ):
             response, _ = await service.process_request(
                 api_key_id=1,

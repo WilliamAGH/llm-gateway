@@ -496,6 +496,65 @@ async def test_kimi_stream_request_without_client_key_derives_prompt_cache_key_f
 
 
 @pytest.mark.asyncio
+async def test_kimi_request_uses_harness_cache_header_for_session_stable_key():
+    affinity_strategy = RecordingAffinityStrategy()
+    service = _kimi_proxy_service(affinity_strategy)
+    captured: dict[str, dict] = {}
+    bodies = [
+        {
+            "model": "researchly-code",
+            "messages": [{"role": "user", "content": "first"}],
+        },
+        {
+            "model": "researchly-code",
+            "messages": [{"role": "user", "content": "second"}],
+        },
+    ]
+
+    def fake_convert_request_for_supplier(*, body, **kwargs):
+        captured.setdefault("conversion_body", body)
+        return "/v1/chat/completions", {"messages": [], "prompt_cache_key": body["prompt_cache_key"]}
+
+    async def forward(*, body: dict, **kwargs):
+        captured.setdefault("forwarded_body", body)
+        return ProviderResponse(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body={"choices": [], "usage": {"prompt_tokens": 2048, "completion_tokens": 1}},
+        )
+
+    fake_client = AsyncMock()
+    fake_client.forward = AsyncMock(side_effect=forward)
+
+    with patch(
+        "app.services.proxy_service.convert_request_for_supplier",
+        side_effect=fake_convert_request_for_supplier,
+    ):
+        with patch(
+            "app.services.proxy_service.get_provider_client",
+            return_value=fake_client,
+        ):
+            for body in bodies:
+                await service.process_request(
+                    api_key_id=1,
+                    api_key_name="k",
+                    request_protocol="anthropic",
+                    path="/v1/messages",
+                    request_url="/v1/messages",
+                    method="POST",
+                    headers={"X-LGW-Cache-Key": "harness-run:abc"},
+                    body=body,
+                )
+
+    forwarded_key = captured["forwarded_body"]["prompt_cache_key"]
+    assert forwarded_key.startswith("llmgw:kimi:")
+    assert captured["conversion_body"]["prompt_cache_key"] == forwarded_key
+    assert affinity_strategy.affinity_keys == [forwarded_key, forwarded_key]
+    assert all("prompt_cache_key" not in body for body in bodies)
+    assert fake_client.forward.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_gpt5_messages_request_derives_prompt_cache_key_for_openai_responses_provider():
     affinity_strategy = RecordingAffinityStrategy()
     service = _gpt_responses_proxy_service(affinity_strategy)

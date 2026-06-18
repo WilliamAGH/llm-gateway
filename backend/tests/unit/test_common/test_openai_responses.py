@@ -16,14 +16,14 @@ from app.common.stream_usage import SSEDecoder
 def test_responses_request_to_chat_completions_string_input_and_instructions():
     chat = responses_request_to_chat_completions(
         {
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.4-mini",
             "instructions": "You are a helpful assistant.",
             "input": "hello",
             "max_output_tokens": 123,
             "temperature": 0.2,
         }
     )
-    assert chat["model"] == "gpt-4o-mini"
+    assert chat["model"] == "gpt-5.4-mini"
     assert chat["max_completion_tokens"] == 123
     assert chat["temperature"] == 0.2
     assert chat["messages"][0]["role"] == "system"
@@ -33,7 +33,7 @@ def test_responses_request_to_chat_completions_string_input_and_instructions():
 def test_responses_request_to_chat_completions_content_blocks():
     chat = responses_request_to_chat_completions(
         {
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.4-mini",
             "input": [
                 {
                     "role": "user",
@@ -49,7 +49,7 @@ def test_responses_request_to_chat_completions_content_blocks():
 def test_chat_completions_request_to_responses_system_and_user():
     responses = chat_completions_request_to_responses(
         {
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.4-mini",
             "messages": [
                 {"role": "system", "content": "You are helpful"},
                 {"role": "user", "content": "hello"},
@@ -140,7 +140,7 @@ def test_chat_completion_to_responses_response_usage_mapping():
             "id": "chatcmpl_123",
             "object": "chat.completion",
             "created": 123456,
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.4-mini",
             "choices": [
                 {
                     "index": 0,
@@ -165,7 +165,7 @@ def test_responses_response_to_chat_completion_usage_mapping():
             "id": "resp_1",
             "object": "response",
             "created_at": 123456,
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.4-mini",
             "output": [
                 {
                     "id": "msg_1",
@@ -191,16 +191,16 @@ def test_responses_response_to_chat_completion_usage_mapping():
 async def test_chat_completions_sse_to_responses_sse_text_delta():
     async def upstream():
         yield (
-            b'data: {"id":"chatcmpl_1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"},"finish_reason":null}],"model":"gpt-4o-mini"}\n\n'
+            b'data: {"id":"chatcmpl_1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"},"finish_reason":null}],"model":"gpt-5.4-mini"}\n\n'
         )
         yield (
-            b'data: {"id":"chatcmpl_1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"lo"},"finish_reason":null}],"model":"gpt-4o-mini"}\n\n'
+            b'data: {"id":"chatcmpl_1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"lo"},"finish_reason":null}],"model":"gpt-5.4-mini"}\n\n'
         )
         yield b"data: [DONE]\n\n"
 
     out_chunks: list[bytes] = []
     async for chunk in chat_completions_sse_to_responses_sse(
-        upstream=upstream(), model="gpt-4o-mini"
+        upstream=upstream(), model="gpt-5.4-mini"
     ):
         out_chunks.append(chunk)
 
@@ -228,7 +228,7 @@ async def test_chat_completions_sse_to_responses_sse_text_delta():
 async def test_responses_sse_to_chat_completions_sse_text_delta():
     async def upstream():
         yield (
-            b'data: {"type":"response.created","response":{"id":"resp_1","object":"response","created_at":1,"model":"gpt-4o-mini"}}\n\n'
+            b'data: {"type":"response.created","response":{"id":"resp_1","object":"response","created_at":1,"model":"gpt-5.4-mini"}}\n\n'
         )
         yield b'data: {"type":"response.output_text.delta","delta":"Hel"}\n\n'
         yield b'data: {"type":"response.output_text.delta","delta":"lo"}\n\n'
@@ -236,7 +236,7 @@ async def test_responses_sse_to_chat_completions_sse_text_delta():
 
     out_chunks: list[bytes] = []
     async for chunk in responses_sse_to_chat_completions_sse(
-        upstream=upstream(), model="gpt-4o-mini"
+        upstream=upstream(), model="gpt-5.4-mini"
     ):
         out_chunks.append(chunk)
 
@@ -261,7 +261,7 @@ def test_chat_completions_request_to_responses_strips_stream_options():
     """
     responses = chat_completions_request_to_responses(
         {
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.4-mini",
             "messages": [{"role": "user", "content": "hello"}],
             "stream": True,
             "stream_options": {"include_usage": True},
@@ -281,7 +281,7 @@ def test_responses_request_to_chat_completions_strips_stream_options():
     """
     chat = responses_request_to_chat_completions(
         {
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.4-mini",
             "input": "hello",
             "stream": True,
             "stream_options": {"include_usage": True},

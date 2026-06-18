@@ -83,6 +83,27 @@ class TestPromptCacheKeyForRequest:
         assert key is not None
         assert key.startswith("llmgw:kimi:")
 
+    def test_kimi_session_hint_wins_over_changing_prefix(self):
+        body_a = {
+            "messages": [
+                {"role": "system", "content": "stable-prefix " * 900},
+                {"role": "user", "content": "first turn"},
+            ]
+        }
+        body_b = {
+            "messages": [
+                {"role": "system", "content": "different-prefix " * 900},
+                {"role": "user", "content": "second turn"},
+            ]
+        }
+
+        key_a = _prompt_cache_key_for_request(body_a, "kimi-k2.7-code", cache_key_hint="harness-run:123")
+        key_b = _prompt_cache_key_for_request(body_b, "kimi-k2.7-code", cache_key_hint="harness-run:123")
+
+        assert key_a is not None
+        assert key_a.startswith("llmgw:kimi:")
+        assert key_a == key_b
+
     def test_derives_from_gpt_prefixed_target_model(self):
         key = _prompt_cache_key_for_request(
             {"messages": [{"role": "user", "content": "hello"}]},
@@ -307,6 +328,19 @@ class TestExactResponseCache:
             requested_model="gpt-5.4",
             target_model="gpt-5.4",
             base_url="https://api.openai.com/v1",
+            input_tokens=2048,
+        ) is True
+
+    def test_allows_long_cross_protocol_kimi_openai_request(self):
+        assert _exact_response_cache_allowed(
+            request_protocol="anthropic",
+            supplier_protocol="openai",
+            supplier_body={"model": "kimi-k2.7-code", "messages": [], "prompt_cache_key": "k"},
+            method="POST",
+            prompt_cache_key="k",
+            requested_model="kimi-k2.7-code",
+            target_model="kimi-k2.7-code",
+            base_url="https://api.moonshot.ai/v1",
             input_tokens=2048,
         ) is True
 

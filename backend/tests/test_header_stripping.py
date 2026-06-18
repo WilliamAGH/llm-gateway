@@ -17,6 +17,7 @@ with patch("app.providers.openai_client.get_settings") as mock_settings:
             "Authorization": "Bearer old-key",
             "X-User-ID": "user-123",
             "Accept-Encoding": "gzip, deflate, br",
+            "X-LGW-Cache-Key": "harness-run:abc",
             "User-Agent": "test-agent"
         }
         
@@ -31,6 +32,7 @@ with patch("app.providers.openai_client.get_settings") as mock_settings:
         assert "content-type" not in [k.lower() for k in prepared.keys()]
         assert "accept-encoding" not in [k.lower() for k in prepared.keys()]
         assert "x-user-id" not in [k.lower() for k in prepared.keys()]
+        assert not any(k.lower().startswith("x-lgw-") for k in prepared.keys())
         
         # Check preserved headers
         assert prepared["User-Agent"] == "test-agent"

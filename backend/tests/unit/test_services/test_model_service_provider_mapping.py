@@ -21,7 +21,7 @@ async def test_create_provider_mapping_allows_duplicates(db_session):
     provider_repo = SQLAlchemyProviderRepository(db_session)
     service = ModelService(model_repo, provider_repo)
 
-    await model_repo.create_mapping(ModelMappingCreate(requested_model="gpt-4o-mini"))
+    await model_repo.create_mapping(ModelMappingCreate(requested_model="gpt-5.4-mini"))
     provider = await provider_repo.create(
         ProviderCreate(
             name="p1",
@@ -33,27 +33,27 @@ async def test_create_provider_mapping_allows_duplicates(db_session):
 
     created = await service.create_provider_mapping(
         ModelMappingProviderCreate(
-            requested_model="gpt-4o-mini",
+            requested_model="gpt-5.4-mini",
             provider_id=provider.id,
-            target_model_name="gpt-4o-mini",
+            target_model_name="gpt-5.4-mini",
             input_price=0.0,
             output_price=0.0,
         )
     )
-    assert created.requested_model == "gpt-4o-mini"
+    assert created.requested_model == "gpt-5.4-mini"
     assert created.provider_id == provider.id
     assert created.provider_name == "p1"
 
     created_second = await service.create_provider_mapping(
         ModelMappingProviderCreate(
-            requested_model="gpt-4o-mini",
+            requested_model="gpt-5.4-mini",
             provider_id=provider.id,
-            target_model_name="gpt-4o-mini",
+            target_model_name="gpt-5.4-mini",
             input_price=0.0,
             output_price=0.0,
         )
     )
-    assert created_second.requested_model == "gpt-4o-mini"
+    assert created_second.requested_model == "gpt-5.4-mini"
     assert created_second.provider_id == provider.id
     assert created_second.provider_name == "p1"
 
@@ -64,7 +64,7 @@ async def test_get_mapping_includes_provider_active_status(db_session):
     provider_repo = SQLAlchemyProviderRepository(db_session)
     service = ModelService(model_repo, provider_repo)
 
-    await model_repo.create_mapping(ModelMappingCreate(requested_model="gpt-4o-mini"))
+    await model_repo.create_mapping(ModelMappingCreate(requested_model="gpt-5.4-mini"))
     provider = await provider_repo.create(
         ProviderCreate(
             name="p-inactive",
@@ -77,16 +77,16 @@ async def test_get_mapping_includes_provider_active_status(db_session):
 
     await service.create_provider_mapping(
         ModelMappingProviderCreate(
-            requested_model="gpt-4o-mini",
+            requested_model="gpt-5.4-mini",
             provider_id=provider.id,
-            target_model_name="gpt-4o-mini",
+            target_model_name="gpt-5.4-mini",
             input_price=0.0,
             output_price=0.0,
             is_active=True,
         )
     )
 
-    mapping = await service.get_mapping("gpt-4o-mini")
+    mapping = await service.get_mapping("gpt-5.4-mini")
     assert mapping.providers is not None
     assert len(mapping.providers) == 1
     assert mapping.providers[0].provider_is_active is False
@@ -277,7 +277,7 @@ async def test_get_provider_pricing_history_resolves_inherited_model_billing(db_
 
     await model_repo.create_mapping(
         ModelMappingCreate(
-            requested_model="gpt-4o-mini",
+            requested_model="gpt-5.4-mini",
             billing_mode="token_flat",
             input_price=0.15,
             output_price=0.6,
@@ -297,14 +297,14 @@ async def test_get_provider_pricing_history_resolves_inherited_model_billing(db_
 
     await service.create_provider_mapping(
         ModelMappingProviderCreate(
-            requested_model="gpt-4o-mini",
+            requested_model="gpt-5.4-mini",
             provider_id=provider.id,
-            target_model_name="gpt-4o-mini",
+            target_model_name="gpt-5.4-mini",
             billing_mode="inherit_model_default",
         )
     )
 
-    history = await service.get_provider_pricing_history("gpt-4o-mini")
+    history = await service.get_provider_pricing_history("gpt-5.4-mini")
 
     assert len(history) == 1
     assert history[0].billing_mode == "inherit_model_default"

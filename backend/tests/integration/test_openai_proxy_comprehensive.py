@@ -81,7 +81,7 @@ class TestOpenAIChatCompletions:
             "id": "chatcmpl-123",
             "object": "chat.completion",
             "created": 1677652288,
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.4-mini",
             "choices": [
                 {
                     "index": 0,
@@ -107,7 +107,7 @@ class TestOpenAIChatCompletions:
             response = await client.post(
                 "/v1/chat/completions",
                 json={
-                    "model": "gpt-4o-mini",
+                    "model": "gpt-5.4-mini",
                     "messages": [{"role": "user", "content": "Hello!"}],
                 },
             )
@@ -120,7 +120,7 @@ class TestOpenAIChatCompletions:
             == "Hello! How can I help you today?"
         )
         assert service.calls[0]["path"] == "/v1/chat/completions"
-        assert service.calls[0]["body"]["model"] == "gpt-4o-mini"
+        assert service.calls[0]["body"]["model"] == "gpt-5.4-mini"
 
         app.dependency_overrides = {}
 
@@ -313,7 +313,7 @@ class TestOpenAIChatCompletions:
             response = await client.post(
                 "/v1/chat/completions",
                 json={
-                    "model": "gpt-4o-mini",
+                    "model": "gpt-5.4-mini",
                     "messages": [{"role": "user", "content": "Hi"}],
                     "stream": True,
                 },
@@ -388,7 +388,7 @@ class TestOpenAIChatCompletions:
             "id": "chatcmpl-json-1",
             "object": "chat.completion",
             "created": 1677652288,
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.4-mini",
             "choices": [
                 {
                     "index": 0,
@@ -410,7 +410,7 @@ class TestOpenAIChatCompletions:
             response = await client.post(
                 "/v1/chat/completions",
                 json={
-                    "model": "gpt-4o-mini",
+                    "model": "gpt-5.4-mini",
                     "messages": [
                         {"role": "user", "content": "Return JSON: {name, age}"}
                     ],
@@ -885,7 +885,7 @@ class TestOpenAIResponses:
             "id": "resp-1",
             "object": "response",
             "created_at": 1677652288,
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.4-mini",
             "output": [
                 {
                     "type": "message",
@@ -905,7 +905,7 @@ class TestOpenAIResponses:
             response = await client.post(
                 "/v1/responses",
                 json={
-                    "model": "gpt-4o-mini",
+                    "model": "gpt-5.4-mini",
                     "input": "Hello",
                 },
             )
@@ -972,12 +972,12 @@ class TestOpenAIResponses:
         """Test Responses API streaming."""
         # OpenAI Responses API streaming format
         chunks = [
-            b'data: {"type":"response.created","response":{"id":"resp-stream","object":"response","status":"in_progress","model":"gpt-4o-mini"}}\n\n',
+            b'data: {"type":"response.created","response":{"id":"resp-stream","object":"response","status":"in_progress","model":"gpt-5.4-mini"}}\n\n',
             b'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","content":[]}}\n\n',
             b'data: {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}}\n\n',
             b'data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"Hi"}\n\n',
             b'data: {"type":"response.output_text.done","output_index":0,"content_index":0,"text":"Hi"}\n\n',
-            b'data: {"type":"response.completed","response":{"id":"resp-stream","object":"response","status":"completed","model":"gpt-4o-mini"}}\n\n',
+            b'data: {"type":"response.completed","response":{"id":"resp-stream","object":"response","status":"completed","model":"gpt-5.4-mini"}}\n\n',
         ]
         service = MockProxyService(response_body=chunks)
         app.dependency_overrides[get_proxy_service] = lambda: service
@@ -988,7 +988,7 @@ class TestOpenAIResponses:
             response = await client.post(
                 "/v1/responses",
                 json={
-                    "model": "gpt-4o-mini",
+                    "model": "gpt-5.4-mini",
                     "input": "Hi",
                     "stream": True,
                 },

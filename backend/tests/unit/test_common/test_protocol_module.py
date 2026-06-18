@@ -149,12 +149,12 @@ class TestConvertRequest:
                 "messages": [{"role": "user", "content": "Hello"}],
                 "max_tokens": 1024,
             },
-            target_model="gpt-4o-mini",
+            target_model="gpt-5.4-mini",
         )
 
         assert isinstance(result, ConversionResult)
         assert result.path == "/v1/chat/completions"
-        assert result.body["model"] == "gpt-4o-mini"
+        assert result.body["model"] == "gpt-5.4-mini"
         assert "messages" in result.body
         # System message should be included
         system_messages = [m for m in result.body["messages"] if m.get("role") == "system"]
@@ -173,12 +173,12 @@ class TestConvertRequest:
                 ],
                 "max_tokens": 512,
             },
-            target_model="gpt-4o-mini",
+            target_model="gpt-5.4-mini",
         )
 
         assert isinstance(result, ConversionResult)
         assert result.path == "/v1/responses"
-        assert result.body["model"] == "gpt-4o-mini"
+        assert result.body["model"] == "gpt-5.4-mini"
         assert "input" in result.body
         assert "instructions" in result.body
 
@@ -192,11 +192,11 @@ class TestConvertRequest:
             target_protocol="openai",
             path="/v1/chat/completions",
             body=original_body,
-            target_model="gpt-4o-mini",
+            target_model="gpt-5.4-mini",
         )
 
         assert result.path == "/v1/chat/completions"
-        assert result.body["model"] == "gpt-4o-mini"
+        assert result.body["model"] == "gpt-5.4-mini"
         assert result.body["messages"] == original_body["messages"]
 
     def test_with_tools(self):
@@ -248,7 +248,7 @@ class TestConvertRequest:
                 ],
                 "function_call": "auto",
             },
-            target_model="gpt-4o-mini",
+            target_model="gpt-5.4-mini",
         )
 
         # Should have normalized to tools
@@ -275,7 +275,7 @@ class TestConvertResponse:
                 "stop_reason": "end_turn",
                 "usage": {"input_tokens": 10, "output_tokens": 5},
             },
-            target_model="gpt-4o-mini",
+            target_model="gpt-5.4-mini",
         )
 
         assert "choices" in result
@@ -291,7 +291,7 @@ class TestConvertResponse:
                 "id": "chatcmpl-123",
                 "object": "chat.completion",
                 "created": 1234567890,
-                "model": "gpt-4o-mini",
+                "model": "gpt-5.4-mini",
                 "choices": [
                     {
                         "index": 0,
@@ -319,7 +319,7 @@ class TestConvertResponse:
             source_protocol="openai",
             target_protocol="openai",
             body=original,
-            target_model="gpt-4o-mini",
+            target_model="gpt-5.4-mini",
         )
         assert result == original
 
@@ -344,7 +344,7 @@ class TestConvertResponse:
                 "stop_reason": "tool_use",
                 "usage": {"input_tokens": 10, "output_tokens": 20},
             },
-            target_model="gpt-4o-mini",
+            target_model="gpt-5.4-mini",
         )
 
         assert "choices" in result
@@ -408,7 +408,7 @@ class TestConvertStream:
             source_protocol="anthropic",
             target_protocol="openai",
             upstream=upstream(),
-            model="gpt-4o-mini",
+            model="gpt-5.4-mini",
         ):
             output_chunks.append(chunk)
 
@@ -428,7 +428,7 @@ class TestConvertStream:
                 "id": "chatcmpl-123",
                 "object": "chat.completion.chunk",
                 "created": 1234567890,
-                "model": "gpt-4o-mini",
+                "model": "gpt-5.4-mini",
                 "choices": [
                     {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}
                 ],
@@ -437,14 +437,14 @@ class TestConvertStream:
                 "id": "chatcmpl-123",
                 "object": "chat.completion.chunk",
                 "created": 1234567890,
-                "model": "gpt-4o-mini",
+                "model": "gpt-5.4-mini",
                 "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": None}],
             },
             {
                 "id": "chatcmpl-123",
                 "object": "chat.completion.chunk",
                 "created": 1234567890,
-                "model": "gpt-4o-mini",
+                "model": "gpt-5.4-mini",
                 "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
             },
         ]
@@ -488,7 +488,7 @@ class TestConvertStream:
             source_protocol="openai",
             target_protocol="openai",
             upstream=upstream(),
-            model="gpt-4o-mini",
+            model="gpt-5.4-mini",
         ):
             output_chunks.append(chunk)
 
@@ -598,7 +598,7 @@ class TestEndToEndConversion:
             source_protocol="anthropic",
             target_protocol="openai",
             body=anthropic_response,
-            target_model="gpt-4o-mini",
+            target_model="gpt-5.4-mini",
         )
 
         # Verify OpenAI format

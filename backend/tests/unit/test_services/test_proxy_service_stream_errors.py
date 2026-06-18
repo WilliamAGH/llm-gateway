@@ -54,7 +54,7 @@ def _candidate() -> CandidateProvider:
         base_url="https://example.com",
         protocol="openai",
         api_key="sk-test",
-        target_model="gpt-4o-mini",
+        target_model="gpt-5.4-mini",
         priority=0,
         weight=1,
     )
@@ -82,7 +82,7 @@ async def test_empty_upstream_stream_yields_502_not_silent():
     with patch("app.services.proxy_service.get_provider_client", return_value=fake_client):
         with patch(
             "app.services.proxy_service.convert_request_for_supplier",
-            return_value=("/v1/chat/completions", {"model": "gpt-4o-mini", "messages": []}),
+            return_value=("/v1/chat/completions", {"model": "gpt-5.4-mini", "messages": []}),
         ):
             initial_response, _gen, _conv = await service.process_request_stream(
                 api_key_id=1,
@@ -129,7 +129,7 @@ async def test_mid_stream_provider_error_surfaces_in_band_frame():
     with patch("app.services.proxy_service.get_provider_client", return_value=fake_client):
         with patch(
             "app.services.proxy_service.convert_request_for_supplier",
-            return_value=("/v1/chat/completions", {"model": "gpt-4o-mini", "messages": []}),
+            return_value=("/v1/chat/completions", {"model": "gpt-5.4-mini", "messages": []}),
         ):
             initial_response, gen, _conv = await service.process_request_stream(
                 api_key_id=1,

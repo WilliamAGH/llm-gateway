@@ -61,12 +61,12 @@ async def test_openai_audio_speech_proxy():
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post(
             "/v1/audio/speech",
-            json={"model": "gpt-4o-mini-tts", "input": "hello", "voice": "alloy"},
+            json={"model": "gpt-5.4-mini", "input": "hello", "voice": "alloy"},
         )
 
     assert response.status_code == 200
     assert service.calls[0]["path"] == "/v1/audio/speech"
-    assert service.calls[0]["body"]["model"] == "gpt-4o-mini-tts"
+    assert service.calls[0]["body"]["model"] == "gpt-5.4-mini"
 
     app.dependency_overrides = {}
 

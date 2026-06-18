@@ -66,6 +66,7 @@ _EXACT_RESPONSE_CACHE_TTL_SECONDS = 600
 _EXACT_RESPONSE_CACHE_MIN_INPUT_TOKENS = 1024
 _EXACT_RESPONSE_CACHE_PREFIX = "exact_response:v1:"
 _EXACT_RESPONSE_CACHE_HIT_HEADER = "x-llm-gateway-response-cache"
+_PROMPT_CACHE_KEY_HINT_HEADER = "x-lgw-cache-key"
 _recent_prompt_cache_keys: dict[str, float] = {}
 
 
@@ -91,6 +92,28 @@ def _prompt_cache_namespace(*values: Any) -> Optional[str]:
     return None
 
 
+def _prompt_cache_key_hint(headers: dict[str, str]) -> Optional[str]:
+    for key, value in headers.items():
+        if key.lower() == _PROMPT_CACHE_KEY_HINT_HEADER:
+            trimmed = str(value).strip()
+            return trimmed[:MAX_USER_ID_LENGTH] if trimmed else None
+    return None
+
+
+def _body_prompt_cache_session(body: dict[str, Any]) -> Optional[str]:
+    metadata = body.get("metadata")
+    if isinstance(metadata, dict) and isinstance(metadata.get("user_id"), str):
+        user_id = metadata["user_id"].strip()
+        if user_id:
+            return user_id
+    user = body.get("user")
+    if isinstance(user, str):
+        user = user.strip()
+        if user:
+            return user
+    return None
+
+
 def _prompt_cache_prefix(body: dict[str, Any]) -> str:
     body = strip_anthropic_billing_system_blocks(body)
     prefix_owner = {
@@ -108,7 +131,10 @@ def _prompt_cache_prefix(body: dict[str, Any]) -> str:
 
 
 def _prompt_cache_key_for_request(
-    body: Any, requested_model: str, target_model: list[str] | None = None
+    body: Any,
+    requested_model: str,
+    target_model: list[str] | None = None,
+    cache_key_hint: Optional[str] = None,
 ) -> Optional[str]:
     existing = _non_empty_prompt_cache_key(body)
     if existing:
@@ -119,8 +145,16 @@ def _prompt_cache_key_for_request(
     namespace = _prompt_cache_namespace(*targets)
     if namespace is None:
         return None
+    if namespace == "kimi":
+        session_hint = cache_key_hint or _body_prompt_cache_session(body)
+        if session_hint:
+            seed_owner = {"model": requested_model, "session": session_hint}
+        else:
+            seed_owner = {"model": requested_model, "prefix": _prompt_cache_prefix(body)}
+    else:
+        seed_owner = {"model": requested_model, "prefix": _prompt_cache_prefix(body)}
     seed = json.dumps(
-        {"model": requested_model, "prefix": _prompt_cache_prefix(body)},
+        seed_owner,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -223,9 +257,14 @@ def _exact_response_cache_allowed(
         return False
     if normalize_protocol(request_protocol) == normalize_protocol(supplier_protocol):
         return False
-    if supplier_protocol != "openai_responses":
-        return False
-    if _prompt_cache_namespace(requested_model, target_model, base_url) != "openai":
+    namespace = _prompt_cache_namespace(requested_model, target_model, base_url)
+    if namespace == "openai":
+        if supplier_protocol != "openai_responses":
+            return False
+    elif namespace == "kimi":
+        if supplier_protocol != "openai":
+            return False
+    else:
         return False
     if int(input_tokens or 0) < _EXACT_RESPONSE_CACHE_MIN_INPUT_TOKENS:
         return False
@@ -744,6 +783,7 @@ class ProxyService:
             body,
             requested_model,
             [candidate.target_model for candidate in candidates],
+            _prompt_cache_key_hint(headers),
         )
         cache_signal_body = _body_with_prompt_cache_key(body, prompt_cache_key)
         token_counter = get_token_counter(protocol)
@@ -1422,6 +1462,7 @@ class ProxyService:
             body,
             requested_model,
             [candidate.target_model for candidate in candidates],
+            _prompt_cache_key_hint(headers),
         )
         cache_signal_body = _body_with_prompt_cache_key(body, prompt_cache_key)
 

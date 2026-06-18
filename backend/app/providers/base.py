@@ -188,7 +188,8 @@ class ProviderClient(ABC):
             "accept-encoding",
         ]
         for key in list(new_headers.keys()):
-            if key.lower() in keys_to_remove:
+            lowered = key.lower()
+            if lowered in keys_to_remove or lowered.startswith("x-lgw-"):
                 del new_headers[key]
         
         # Add provider API Key
@@ -200,7 +201,8 @@ class ProviderClient(ABC):
             new_headers.update(extra_headers)
 
         for key in list(new_headers.keys()):
-            if key.lower() == "x-user-id":
+            lowered = key.lower()
+            if lowered == "x-user-id" or lowered.startswith("x-lgw-"):
                 del new_headers[key]
         
         return new_headers
