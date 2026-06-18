@@ -128,7 +128,7 @@ def _normalize_openai_user_identifier(body: dict[str, Any]) -> None:
             metadata["user_id"] = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
 
 
-def _strip_anthropic_billing_system_blocks(body: dict[str, Any]) -> dict[str, Any]:
+def strip_anthropic_billing_system_blocks(body: dict[str, Any]) -> dict[str, Any]:
     """Drop the Claude Agent SDK's ``x-anthropic-billing-header`` system block for OpenAI-bound traffic.
 
     The SDK prepends an Anthropic-internal billing/telemetry marker as the first ``system`` text block,
@@ -201,7 +201,7 @@ def convert_request_for_supplier(
             OPENAI_PROTOCOL,
             OPENAI_RESPONSES_PROTOCOL,
         ):
-            source_body = _strip_anthropic_billing_system_blocks(body)
+            source_body = strip_anthropic_billing_system_blocks(body)
 
         # Use new conversion module
         result = _convert_request(

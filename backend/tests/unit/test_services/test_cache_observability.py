@@ -102,6 +102,32 @@ class TestPromptCacheKeyForRequest:
         assert key is not None
         assert key.startswith("llmgw:openai:")
 
+    def test_gpt_key_ignores_rotating_claude_code_billing_system_block(self):
+        stable_system = {"type": "text", "text": "You are Claude Code."}
+        body_a = {
+            "system": [
+                {"type": "text", "text": "x-anthropic-billing-header: cch=first;"},
+                stable_system,
+            ],
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+        body_b = {
+            "system": [
+                {"type": "text", "text": "x-anthropic-billing-header: cch=second;"},
+                stable_system,
+            ],
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        key_a = _prompt_cache_key_for_request(body_a, "gpt-5.4")
+        key_b = _prompt_cache_key_for_request(body_b, "gpt-5.4")
+
+        assert key_a is not None
+        assert key_a.startswith("llmgw:openai:")
+        assert key_a == key_b
+        assert "prompt_cache_key" not in body_a
+        assert "prompt_cache_key" not in body_b
+
     def test_does_not_derive_key_for_local_gpt_oss_model(self):
         key = _prompt_cache_key_for_request(
             {"messages": [{"role": "user", "content": "hello"}]},

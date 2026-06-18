@@ -19,6 +19,7 @@ from app.common.protocol_conversion import (
     convert_response_for_user,
     convert_stream_for_user,
     normalize_protocol,
+    strip_anthropic_billing_system_blocks,
 )
 from app.common.provider_protocols import resolve_implementation_protocol
 from app.common.proxy import build_proxy_config
@@ -91,6 +92,7 @@ def _prompt_cache_namespace(*values: Any) -> Optional[str]:
 
 
 def _prompt_cache_prefix(body: dict[str, Any]) -> str:
+    body = strip_anthropic_billing_system_blocks(body)
     prefix_owner = {
         key: body[key]
         for key in ("messages", "system", "instructions", "input", "tools", "response_format")
