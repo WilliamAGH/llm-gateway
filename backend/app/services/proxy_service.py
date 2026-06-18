@@ -951,6 +951,22 @@ class ProxyService:
                     )
                     if hooked_image_body is not None:
                         hooked_body = hooked_image_body
+                # Non-OpenAI client -> Gemini provider pivots through OpenAI inside
+                # the converter, so the OpenAI-gated thought_signature hooks miss it.
+                # Pre-fetch the cached signatures by tool_use id and hand them to the
+                # converter to restore onto the OpenAI-intermediate before Gemini.
+                if (
+                    normalize_protocol(supplier_protocol) == "gemini"
+                    and normalize_protocol(request_protocol) != "openai"
+                ):
+                    inject_extra = (
+                        await self._protocol_hooks.prefetch_tool_call_extra_content(
+                            hooked_body
+                        )
+                    )
+                    if inject_extra:
+                        conversion_options = dict(conversion_options or {})
+                        conversion_options["tool_call_extra_content_inject"] = inject_extra
                 supplier_path, supplier_body = convert_request_for_supplier(
                     request_protocol=request_protocol,
                     supplier_protocol=candidate.protocol,
@@ -1139,12 +1155,28 @@ class ProxyService:
                 conversion_data["upstream_response_body"] = hooked_upstream_body
                 response_body = hooked_upstream_body
                 if not same_protocol:
+                    # Harvest Gemini thought_signatures from the converter's
+                    # OpenAI-intermediate for the non-OpenAI client path the
+                    # OpenAI-gated hooks miss, then persist them for later turns.
+                    response_extra_sink: dict[str, Any] = {}
                     response_body = convert_response_for_user(
                         request_protocol=request_protocol,
                         supplier_protocol=supplier_protocol,
                         body=hooked_upstream_body,
                         target_model=result.final_provider.target_model,
+                        options=(
+                            {"tool_call_extra_content_sink": response_extra_sink}
+                            if (
+                                normalize_protocol(supplier_protocol) == "gemini"
+                                and normalize_protocol(request_protocol) != "openai"
+                            )
+                            else None
+                        ),
                     )
+                    if response_extra_sink:
+                        await self._protocol_hooks.cache_tool_call_extra_content_map(
+                            response_extra_sink
+                        )
                 hooked_response_body = await self._protocol_hooks.after_response_conversion(
                     response_body,
                     request_protocol,
@@ -1531,6 +1563,22 @@ class ProxyService:
                     )
                     if hooked_image_body is not None:
                         hooked_body = hooked_image_body
+                # Non-OpenAI client -> Gemini provider pivots through OpenAI inside
+                # the converter, so the OpenAI-gated thought_signature hooks miss it.
+                # Pre-fetch the cached signatures by tool_use id and hand them to the
+                # converter to restore onto the OpenAI-intermediate before Gemini.
+                if (
+                    normalize_protocol(supplier_protocol) == "gemini"
+                    and normalize_protocol(request_protocol) != "openai"
+                ):
+                    inject_extra = (
+                        await self._protocol_hooks.prefetch_tool_call_extra_content(
+                            hooked_body
+                        )
+                    )
+                    if inject_extra:
+                        conversion_options = dict(conversion_options or {})
+                        conversion_options["tool_call_extra_content_inject"] = inject_extra
                 supplier_path, supplier_body = convert_request_for_supplier(
                     request_protocol=request_protocol,
                     supplier_protocol=candidate.protocol,
@@ -1709,6 +1757,14 @@ class ProxyService:
                             upstream=upstream_bytes(),
                             model=candidate.target_model,
                             input_tokens=input_tokens,
+                            extra_content_store_cb=(
+                                self._protocol_hooks.cache_tool_call_extra_content
+                                if (
+                                    normalize_protocol(supplier_protocol) == "gemini"
+                                    and normalize_protocol(request_protocol) != "openai"
+                                )
+                                else None
+                            ),
                         ):
                             hooked_out_chunk = (
                                 await self._protocol_hooks.after_stream_chunk_conversion(

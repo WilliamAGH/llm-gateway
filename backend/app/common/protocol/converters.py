@@ -1321,6 +1321,41 @@ def _openai_response_to_gemini(
     return body
 
 
+def _apply_tool_call_extra_content(
+    openai_body: Dict[str, Any], id_to_extra: Optional[Dict[str, Any]]
+) -> None:
+    """Restore cached tool-call ``extra_content`` (e.g. Google thought_signature)
+    onto an OpenAI-intermediate request body before it is converted onward to a
+    provider. Keyed by tool_call id; any existing extra_content is preserved."""
+    if not id_to_extra:
+        return
+    for message in openai_body.get("messages", []) or []:
+        if not isinstance(message, dict):
+            continue
+        for tool_call in message.get("tool_calls") or []:
+            if not isinstance(tool_call, dict) or tool_call.get("extra_content"):
+                continue
+            extra = id_to_extra.get(tool_call.get("id"))
+            if extra:
+                tool_call["extra_content"] = extra
+
+
+def _collect_tool_call_extra_content(openai_body: Dict[str, Any]) -> Dict[str, Any]:
+    """Harvest tool-call ``extra_content`` from an OpenAI-intermediate response
+    body, keyed by tool_call id, so the proxy can persist it for later turns."""
+    collected: Dict[str, Any] = {}
+    for choice in openai_body.get("choices", []) or []:
+        message = choice.get("message", {}) if isinstance(choice, dict) else {}
+        for tool_call in message.get("tool_calls") or []:
+            if not isinstance(tool_call, dict):
+                continue
+            extra = tool_call.get("extra_content")
+            tool_call_id = tool_call.get("id")
+            if extra and tool_call_id:
+                collected[tool_call_id] = extra
+    return collected
+
+
 class SDKRequestConverter(IRequestConverter):
     """
     Request converter using llm_api_converter SDK.
@@ -1365,6 +1400,10 @@ class SDKRequestConverter(IRequestConverter):
             )
 
         options = options or {}
+        # Private carrier (popped so it never reaches the SDK): cached tool-call
+        # extra_content (e.g. Google thought_signature) to restore onto the
+        # OpenAI-intermediate before a Gemini-bound conversion.
+        inject_extra_content = options.pop("tool_call_extra_content_inject", None)
 
         try:
             original_body = copy.deepcopy(body)
@@ -1428,6 +1467,7 @@ class SDKRequestConverter(IRequestConverter):
                         f"Unsupported source protocol for Gemini conversion: {self._source.value}",
                     )
 
+                _apply_tool_call_extra_content(openai_body, inject_extra_content)
                 openai_body["model"] = target_model
                 return _openai_chat_to_gemini_request(openai_body, target_model)
 
@@ -1586,10 +1626,18 @@ class SDKResponseConverter(IResponseConverter):
             )
 
         options = options or {}
+        # Private carrier (popped so it never reaches the SDK): a sink dict the
+        # proxy reads back to persist tool-call extra_content harvested from the
+        # OpenAI-intermediate of a Gemini response bound for a non-OpenAI client.
+        extra_content_sink = options.pop("tool_call_extra_content_sink", None)
 
         try:
             if self._source == Protocol.GEMINI:
                 openai_body = _gemini_response_to_openai(body, target_model)
+                if extra_content_sink is not None and self._target != Protocol.OPENAI:
+                    extra_content_sink.update(
+                        _collect_tool_call_extra_content(openai_body)
+                    )
                 if self._target == Protocol.OPENAI:
                     return openai_body
 
@@ -1674,6 +1722,13 @@ class SDKStreamConverter(IStreamConverter):
                 code="sdk_unavailable",
             )
 
+        # Private carrier (popped so it never reaches sub-converters/SDK): an
+        # async callback(tool_call_id, extra_content) the proxy uses to persist
+        # Gemini thought_signatures harvested from the OpenAI-intermediate stream.
+        store_cb = None
+        if options:
+            store_cb = options.pop("tool_call_extra_content_store_cb", None)
+
         # Use specialized converters for each direction
         if self._source == Protocol.ANTHROPIC and self._target == Protocol.OPENAI:
             async for chunk in self._convert_anthropic_to_openai(upstream, model):
@@ -1742,6 +1797,8 @@ class SDKStreamConverter(IStreamConverter):
                 yield chunk
         elif self._source == Protocol.GEMINI and self._target == Protocol.ANTHROPIC:
             openai_stream = self._convert_gemini_to_openai(upstream, model)
+            if store_cb is not None:
+                openai_stream = self._tap_tool_call_extra_content(openai_stream, store_cb)
             async for chunk in self._convert_openai_to_anthropic(openai_stream, model):
                 yield chunk
         elif self._source == Protocol.ANTHROPIC and self._target == Protocol.GEMINI:
@@ -1752,6 +1809,40 @@ class SDKStreamConverter(IStreamConverter):
             # Generic fallback using SDK
             async for chunk in self._generic_stream_conversion(upstream, model):
                 yield chunk
+
+    async def _tap_tool_call_extra_content(
+        self,
+        upstream: AsyncGenerator[bytes, None],
+        store_cb: Any,
+    ) -> AsyncGenerator[bytes, None]:
+        """Pass-through tap over an OpenAI-intermediate stream that persists
+        tool-call ``extra_content`` (e.g. Google thought_signature) via ``store_cb``
+        so later turns can restore it. Chunks are yielded unchanged."""
+        decoder = _SSEDecoder()
+        async for chunk in upstream:
+            try:
+                for payload in decoder.feed(chunk):
+                    if not payload or payload.strip() == "[DONE]":
+                        continue
+                    try:
+                        data = json.loads(payload)
+                    except Exception:
+                        continue
+                    for choice in data.get("choices", []) or []:
+                        delta = choice.get("delta", {}) if isinstance(choice, dict) else {}
+                        for tool_call in delta.get("tool_calls") or []:
+                            if not isinstance(tool_call, dict):
+                                continue
+                            extra = tool_call.get("extra_content")
+                            tool_call_id = tool_call.get("id")
+                            if extra and tool_call_id:
+                                try:
+                                    await store_cb(tool_call_id, extra)
+                                except Exception as e:
+                                    logger.debug(f"extra_content tap store failed: {e}")
+            except Exception as e:
+                logger.debug(f"extra_content tap parse failed: {e}")
+            yield chunk
 
     async def _convert_anthropic_to_openai(
         self,

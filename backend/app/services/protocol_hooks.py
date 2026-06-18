@@ -108,6 +108,67 @@ class ProtocolConversionHooks:
             await self._cache_response_tool_call_extra_content_stream(chunk)
         return chunk
 
+    # --- Gemini thought_signature persistence for non-OpenAI clients ----------
+    # The hooks above keep Gemini tool-call thought_signatures alive across turns
+    # for OpenAI clients (KV keyed by tool_call id). Anthropic / OpenAI-Responses
+    # clients hitting a Gemini provider pivot through OpenAI *inside* the
+    # converter, so these protocol-boundary hooks never see that intermediate and
+    # the signature is lost -> Gemini 400s on the next tool turn. The proxy uses
+    # the helpers below to run the same KV cache/inject against the converter's
+    # OpenAI-intermediate for that path.
+
+    @staticmethod
+    def _anthropic_tool_use_ids(body: Any) -> list[str]:
+        ids: list[str] = []
+        if not isinstance(body, dict):
+            return ids
+        for message in body.get("messages", []) or []:
+            content = message.get("content") if isinstance(message, dict) else None
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    tool_use_id = block.get("id")
+                    if isinstance(tool_use_id, str) and tool_use_id:
+                        ids.append(tool_use_id)
+        return ids
+
+    async def prefetch_tool_call_extra_content(self, request_body: Any) -> dict[str, Any]:
+        """Fetch cached tool-call extra_content for every tool_use id in an
+        Anthropic request body, keyed by tool_call id (empty without a KV repo)."""
+        result: dict[str, Any] = {}
+        if not self._kv_repo:
+            return result
+        for tool_call_id in self._anthropic_tool_use_ids(request_body):
+            try:
+                cached = await self._kv_repo.get(f"tool_call_extra:{tool_call_id}")
+            except Exception as e:
+                logger.debug(f"Error prefetching extra_content for {tool_call_id}: {e}")
+                continue
+            if cached:
+                try:
+                    result[tool_call_id] = json.loads(cached.value)
+                except Exception as e:
+                    logger.debug(f"Error decoding extra_content for {tool_call_id}: {e}")
+        return result
+
+    async def cache_tool_call_extra_content(self, tool_call_id: str, extra_content: Any) -> None:
+        """Cache a single tool-call extra_content blob by id (stream tap callback)."""
+        if not self._kv_repo or not tool_call_id or not extra_content:
+            return
+        try:
+            await self._kv_repo.set(
+                f"tool_call_extra:{tool_call_id}",
+                json.dumps(extra_content, ensure_ascii=False),
+                ttl_seconds=TOOL_CALL_EXTRA_CONTENT_TTL,
+            )
+        except Exception as e:
+            logger.warning(f"Error caching extra_content for {tool_call_id}: {e}")
+
+    async def cache_tool_call_extra_content_map(self, mapping: dict[str, Any]) -> None:
+        for tool_call_id, extra_content in (mapping or {}).items():
+            await self.cache_tool_call_extra_content(tool_call_id, extra_content)
+
     async def before_image_request_conversion(
         self,
         body: dict[str, Any],

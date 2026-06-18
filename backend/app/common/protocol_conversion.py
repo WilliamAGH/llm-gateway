@@ -278,6 +278,7 @@ def convert_response_for_user(
     supplier_protocol: str,
     body: Any,
     target_model: str,
+    options: Optional[dict[str, Any]] = None,
 ) -> Any:
     """
     Convert supplier response to user request protocol response body.
@@ -314,6 +315,7 @@ def convert_response_for_user(
             target_protocol=request_protocol,
             body=body,
             target_model=target_model,
+            options=options,
         )
 
     except UnsupportedConversionError as e:
@@ -347,6 +349,7 @@ async def convert_stream_for_user(
     upstream: AsyncGenerator[bytes, None],
     model: str,
     input_tokens: Optional[int] = None,
+    extra_content_store_cb: Optional[Any] = None,
 ) -> AsyncGenerator[bytes, None]:
     """
     Convert supplier SSE bytes stream to user request protocol SSE bytes stream.
@@ -381,14 +384,17 @@ async def convert_stream_for_user(
 
         # Use new conversion module
         # Note: For stream conversion, we convert FROM supplier TO user request protocol
+        stream_options: dict[str, Any] = {}
+        if input_tokens is not None:
+            stream_options["input_tokens"] = input_tokens
+        if extra_content_store_cb is not None:
+            stream_options["tool_call_extra_content_store_cb"] = extra_content_store_cb
         async for chunk in _convert_stream(
             source_protocol=supplier_protocol,
             target_protocol=request_protocol,
             upstream=upstream,
             model=model,
-            options={"input_tokens": input_tokens}
-            if input_tokens is not None
-            else None,
+            options=stream_options or None,
         ):
             yield chunk
 
