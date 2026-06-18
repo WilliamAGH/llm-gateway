@@ -70,8 +70,16 @@ def _apply_extended_cache(
         (sending it would silently degrade caching with no error).
     Deep-copies before mutating so a retry/failover that re-forwards the caller's original body is
     never poisoned with a stale ttl="1h"."""
+    tier_value = header_value(headers, TIER_HEADER)
     if is_minimax or not _is_batch_tier(headers):
+        logger.info(
+            "ext-cache skip: x-tier=%r is_minimax=%s header_keys=%s",
+            tier_value,
+            is_minimax,
+            sorted(headers.keys()),
+        )
         return body
+    logger.info("ext-cache apply 1h ttl: x-tier=%r", tier_value)
     body = copy.deepcopy(body)
     _set_cache_control_ttl(body, EXTENDED_CACHE_TTL)
     return body
