@@ -83,7 +83,7 @@ class TestPromptCacheKeyForRequest:
         assert key is not None
         assert key.startswith("llmgw:kimi:")
 
-    def test_kimi_session_hint_wins_over_changing_prefix(self):
+    def test_kimi_session_hint_stays_stable_for_growing_conversation(self):
         body_a = {
             "messages": [
                 {"role": "system", "content": "stable-prefix " * 900},
@@ -93,6 +93,8 @@ class TestPromptCacheKeyForRequest:
         body_b = {
             "messages": [
                 {"role": "system", "content": "different-prefix " * 900},
+                {"role": "user", "content": "first turn"},
+                {"role": "assistant", "content": "answer"},
                 {"role": "user", "content": "second turn"},
             ]
         }
@@ -103,6 +105,29 @@ class TestPromptCacheKeyForRequest:
         assert key_a is not None
         assert key_a.startswith("llmgw:kimi:")
         assert key_a == key_b
+
+    def test_kimi_session_hint_splits_independent_subagent_conversations(self):
+        body_a = {
+            "messages": [
+                {"role": "system", "content": "stable-prefix " * 900},
+                {"role": "user", "content": "research company funding"},
+            ]
+        }
+        body_b = {
+            "messages": [
+                {"role": "system", "content": "stable-prefix " * 900},
+                {"role": "user", "content": "research company competitors"},
+            ]
+        }
+
+        key_a = _prompt_cache_key_for_request(body_a, "kimi-k2.7-code", cache_key_hint="harness-run:123")
+        key_b = _prompt_cache_key_for_request(body_b, "kimi-k2.7-code", cache_key_hint="harness-run:123")
+
+        assert key_a is not None
+        assert key_b is not None
+        assert key_a.startswith("llmgw:kimi:")
+        assert key_b.startswith("llmgw:kimi:")
+        assert key_a != key_b
 
     def test_derives_from_gpt_prefixed_target_model(self):
         key = _prompt_cache_key_for_request(

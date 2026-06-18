@@ -507,7 +507,11 @@ async def test_kimi_request_uses_harness_cache_header_for_session_stable_key():
         },
         {
             "model": "researchly-code",
-            "messages": [{"role": "user", "content": "second"}],
+            "messages": [
+                {"role": "user", "content": "first"},
+                {"role": "assistant", "content": "answer"},
+                {"role": "user", "content": "second"},
+            ],
         },
     ]
 

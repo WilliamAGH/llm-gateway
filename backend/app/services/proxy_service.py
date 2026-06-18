@@ -130,6 +130,48 @@ def _prompt_cache_prefix(body: dict[str, Any]) -> str:
     )[:_PROMPT_CACHE_PREFIX_CHARS]
 
 
+def _first_conversation_turn(body: dict[str, Any]) -> Optional[dict[str, Any]]:
+    messages = body.get("messages")
+    if isinstance(messages, list):
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            if message.get("role") != "system":
+                return {
+                    "role": message.get("role"),
+                    "content": message.get("content"),
+                }
+        for message in messages:
+            if isinstance(message, dict):
+                return {
+                    "role": message.get("role"),
+                    "content": message.get("content"),
+                }
+
+    input_value = body.get("input")
+    if isinstance(input_value, list) and input_value:
+        return {"input": input_value[0]}
+    if isinstance(input_value, str) and input_value.strip():
+        return {"input": input_value}
+
+    return None
+
+
+def _kimi_session_seed_owner(body: dict[str, Any], requested_model: str, session_hint: str) -> dict[str, Any]:
+    first_turn = _first_conversation_turn(strip_anthropic_billing_system_blocks(body))
+    if first_turn:
+        return {
+            "conversation": first_turn,
+            "model": requested_model,
+            "session": session_hint,
+        }
+    return {
+        "model": requested_model,
+        "prefix": _prompt_cache_prefix(body),
+        "session": session_hint,
+    }
+
+
 def _prompt_cache_key_for_request(
     body: Any,
     requested_model: str,
@@ -148,7 +190,7 @@ def _prompt_cache_key_for_request(
     if namespace == "kimi":
         session_hint = cache_key_hint or _body_prompt_cache_session(body)
         if session_hint:
-            seed_owner = {"model": requested_model, "session": session_hint}
+            seed_owner = _kimi_session_seed_owner(body, requested_model, session_hint)
         else:
             seed_owner = {"model": requested_model, "prefix": _prompt_cache_prefix(body)}
     else:
