@@ -39,6 +39,31 @@ def test_openai_stream_prefers_upstream_reported_usage():
     assert result.upstream_reported_output_tokens == 7
 
 
+def test_openai_responses_stream_preserves_cached_tokens_from_usage_details():
+    acc = StreamUsageAccumulator(protocol="openai_responses", model="gpt-5.4-mini")
+    chunks = [
+        (
+            b"event: response.completed\n"
+            b'data: {"type":"response.completed","response":{"usage":'
+            b'{"input_tokens":25891,"input_tokens_details":{"cached_tokens":25088},'
+            b'"output_tokens":615,"total_tokens":26506}}}\n\n'
+        ),
+        b'data: {"usage":{"output_tokens":0}}\n\n',
+        b"data: [DONE]\n\n",
+    ]
+    for c in chunks:
+        acc.feed(c)
+
+    result = acc.finalize()
+    assert result.input_tokens == 25891
+    assert result.output_tokens == 615
+    assert result.usage_details is not None
+    assert result.usage_details["cached_tokens"] == 25088
+    assert result.usage_details["raw_usage"]["input_tokens_details"] == {
+        "cached_tokens": 25088
+    }
+
+
 def test_anthropic_stream_accumulates_text_and_uses_output_tokens():
     acc = StreamUsageAccumulator(protocol="anthropic", model="claude-3")
     chunks = [

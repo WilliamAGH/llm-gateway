@@ -1990,22 +1990,37 @@ class ProxyService:
                 return
             finally:
                 usage_result = usage_acc.finalize()
-                usage_details = usage_result.usage_details
-                if usage_result.input_tokens:
+                upstream_usage_acc = StreamUsageAccumulator(
+                    protocol=stream_conversion_data.get("supplier_protocol") or protocol,
+                    model=requested_model,
+                )
+                for upstream_chunk in stream_conversion_data.get("upstream_chunks") or []:
+                    upstream_usage_acc.feed(upstream_chunk)
+                upstream_usage_result = upstream_usage_acc.finalize()
+                usage_details = (
+                    upstream_usage_result.usage_details or usage_result.usage_details
+                )
+                if upstream_usage_result.input_tokens:
+                    input_tokens = upstream_usage_result.input_tokens
+                elif usage_result.input_tokens:
                     input_tokens = usage_result.input_tokens
+                output_tokens = (
+                    upstream_usage_result.upstream_reported_output_tokens
+                    or usage_result.output_tokens
+                )
                 if usage_details is None:
                     usage_details = {
                         "input_tokens": input_tokens,
-                        "output_tokens": usage_result.output_tokens,
+                        "output_tokens": output_tokens,
                         "total_tokens": (input_tokens or 0)
-                        + (usage_result.output_tokens or 0),
+                        + (output_tokens or 0),
                         "source": "estimated",
                     }
                 elif not usage_details.get("input_tokens"):
                     usage_details["input_tokens"] = input_tokens
                     usage_details["source"] = "mixed"
                 if not usage_details.get("output_tokens"):
-                    usage_details["output_tokens"] = usage_result.output_tokens
+                    usage_details["output_tokens"] = output_tokens
                     usage_details["source"] = "mixed"
                 if not usage_details.get("total_tokens") and usage_details.get(
                     "input_tokens"
@@ -2073,7 +2088,7 @@ class ProxyService:
                 cost = calculate_cost_from_billing(
                     billing=billing,
                     input_tokens=input_tokens,
-                    output_tokens=usage_result.output_tokens,
+                    output_tokens=output_tokens,
                     image_count=image_count,
                     cached_input_tokens=stream_cached_input_tokens,
                 )
@@ -2087,7 +2102,7 @@ class ProxyService:
                         "type": "stream_reconstruction",
                         "protocol": protocol,
                         "output_text": usage_result.output_text,
-                        "upstream_reported_output_tokens": usage_result.upstream_reported_output_tokens,
+                        "upstream_reported_output_tokens": output_tokens,
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -2111,7 +2126,7 @@ class ProxyService:
                     first_byte_delay_ms=initial_response.first_byte_delay_ms,
                     total_time_ms=total_time_ms,
                     input_tokens=input_tokens,
-                    output_tokens=usage_result.output_tokens,
+                    output_tokens=output_tokens,
                     total_cost=cost.total_cost,
                     input_cost=cost.input_cost,
                     output_cost=cost.output_cost,

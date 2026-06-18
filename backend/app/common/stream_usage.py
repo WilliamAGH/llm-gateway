@@ -309,10 +309,10 @@ class StreamUsageAccumulator:
         details = extract_usage_details(data)
         if not details:
             return
-        self._usage_details = details
-        if details.output_tokens is not None:
+        self._usage_details = _merge_usage_details(self._usage_details, details)
+        if details.output_tokens:
             self._upstream_output_tokens = details.output_tokens
-        if details.input_tokens is not None:
+        if details.input_tokens:
             self._upstream_input_tokens = details.input_tokens
             return
 
@@ -320,3 +320,77 @@ class StreamUsageAccumulator:
         completion = data.get("completion")
         if isinstance(completion, str) and completion:
             self._text_parts.append(completion)
+
+
+def _merge_usage_details(
+    current: Optional[UsageDetails],
+    incoming: UsageDetails,
+) -> UsageDetails:
+    if current is None:
+        return incoming
+
+    return UsageDetails(
+        input_tokens=_merge_token_count(current.input_tokens, incoming.input_tokens),
+        output_tokens=_merge_token_count(current.output_tokens, incoming.output_tokens),
+        total_tokens=_merge_token_count(current.total_tokens, incoming.total_tokens),
+        cached_tokens=_merge_token_count(current.cached_tokens, incoming.cached_tokens),
+        cache_creation_input_tokens=_merge_token_count(
+            current.cache_creation_input_tokens,
+            incoming.cache_creation_input_tokens,
+        ),
+        cache_read_input_tokens=_merge_token_count(
+            current.cache_read_input_tokens,
+            incoming.cache_read_input_tokens,
+        ),
+        input_audio_tokens=_merge_token_count(
+            current.input_audio_tokens,
+            incoming.input_audio_tokens,
+        ),
+        output_audio_tokens=_merge_token_count(
+            current.output_audio_tokens,
+            incoming.output_audio_tokens,
+        ),
+        input_image_tokens=_merge_token_count(
+            current.input_image_tokens,
+            incoming.input_image_tokens,
+        ),
+        output_image_tokens=_merge_token_count(
+            current.output_image_tokens,
+            incoming.output_image_tokens,
+        ),
+        input_video_tokens=_merge_token_count(
+            current.input_video_tokens,
+            incoming.input_video_tokens,
+        ),
+        output_video_tokens=_merge_token_count(
+            current.output_video_tokens,
+            incoming.output_video_tokens,
+        ),
+        reasoning_tokens=_merge_token_count(
+            current.reasoning_tokens,
+            incoming.reasoning_tokens,
+        ),
+        tool_tokens=_merge_token_count(current.tool_tokens, incoming.tool_tokens),
+        source=incoming.source if incoming.source != "upstream" else current.source,
+        raw_usage=_merge_dict(current.raw_usage, incoming.raw_usage),
+        extra_usage=_merge_dict(current.extra_usage, incoming.extra_usage),
+    )
+
+
+def _merge_token_count(current: Optional[int], incoming: Optional[int]) -> Optional[int]:
+    if incoming is None:
+        return current
+    if current is not None and current > 0 and incoming == 0:
+        return current
+    return incoming
+
+
+def _merge_dict(
+    current: Optional[dict[str, Any]],
+    incoming: Optional[dict[str, Any]],
+) -> Optional[dict[str, Any]]:
+    if current is None:
+        return incoming
+    if incoming is None:
+        return current
+    return {**current, **incoming}
