@@ -4,6 +4,7 @@ Anthropic Protocol Client
 Implements Anthropic-compatible request forwarding.
 """
 
+import copy
 import json
 import logging
 from urllib.parse import urlparse
@@ -41,8 +42,8 @@ def _is_batch_tier(headers: dict[str, str]) -> bool:
 
 
 def _set_cache_control_ttl(node: Any, ttl: str) -> None:
-    """Recursively upgrade every ephemeral cache_control block in a request body to `ttl`. Mutates in
-    place; the body is request-scoped and discarded after forwarding."""
+    """Recursively upgrade every ephemeral cache_control block in `node` to `ttl`. Mutates in place;
+    callers pass a copy they own (see `_apply_extended_cache`), never a shared request body."""
     if isinstance(node, dict):
         cache_control = node.get("cache_control")
         if isinstance(cache_control, dict) and cache_control.get("type") == "ephemeral":
@@ -54,11 +55,24 @@ def _set_cache_control_ttl(node: Any, ttl: str) -> None:
             _set_cache_control_ttl(value, ttl)
 
 
-def _apply_extended_cache(body: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
-    """Batch tier only: upgrade ephemeral cache_control blocks to the 1h TTL so a stable prefix stays
-    cache-readable across slow iterations / resume-after-backoff. No-op for other tiers."""
-    if _is_batch_tier(headers):
-        _set_cache_control_ttl(body, EXTENDED_CACHE_TTL)
+def _apply_extended_cache(
+    body: dict[str, Any],
+    headers: dict[str, str],
+    *,
+    is_minimax: bool = False,
+) -> dict[str, Any]:
+    """Batch tier, real-Anthropic only: return a DEEP COPY of `body` with ephemeral cache_control
+    blocks upgraded to the 1h TTL so a stable prefix stays cache-readable across slow iterations /
+    resume-after-backoff. Returns `body` unchanged (no copy) when:
+      - not the batch tier (live traffic keeps the cheaper 5m default), or
+      - the upstream is MiniMax, whose Anthropic-compat layer does not honor the extended TTL
+        (sending it would silently degrade caching with no error).
+    Deep-copies before mutating so a retry/failover that re-forwards the caller's original body is
+    never poisoned with a stale ttl="1h"."""
+    if is_minimax or not _is_batch_tier(headers):
+        return body
+    body = copy.deepcopy(body)
+    _set_cache_control_ttl(body, EXTENDED_CACHE_TTL)
     return body
 
 
@@ -156,9 +170,13 @@ class AnthropicClient(ProviderClient):
             "host",
             "content-type",
             "accept-encoding",
+            TIER_HEADER,  # internal routing tier (x-tier); routing-only, never forward upstream
         ]
+        # Strip exact internal headers plus the gateway's own x-lgw-* observability namespace,
+        # so no internal header leaks to the upstream provider.
         for key in list(new_headers.keys()):
-            if key.lower() in keys_to_remove:
+            lowered = key.lower()
+            if lowered in keys_to_remove or lowered.startswith("x-lgw-"):
                 del new_headers[key]
         
         # Add Anthropic specific header
@@ -210,14 +228,15 @@ class AnthropicClient(ProviderClient):
             ProviderResponse: Provider response
         """
         url = build_upstream_url(base_url, path)
+        is_minimax = self._is_minimax_base_url(base_url)
         prepared_body = self._prepare_body(body, target_model)
-        prepared_body = _apply_extended_cache(prepared_body, headers)
+        prepared_body = _apply_extended_cache(prepared_body, headers, is_minimax=is_minimax)
         prepared_headers = self._prepare_headers(headers, api_key, extra_headers)
-        if self._is_minimax_base_url(base_url):
+        if is_minimax:
             prepared_body = self._sanitize_minimax_body(prepared_body)
             prepared_headers = self._sanitize_minimax_headers(prepared_headers)
         prepared_headers["Content-Type"] = "application/json"
-        
+
         logger.debug(
             "Anthropic Request: method=%s url=%s headers=%s body=%s",
             method,
@@ -391,14 +410,15 @@ class AnthropicClient(ProviderClient):
             tuple[bytes, ProviderResponse]: (Data chunk, Response info)
         """
         url = build_upstream_url(base_url, path)
+        is_minimax = self._is_minimax_base_url(base_url)
         prepared_body = self._prepare_body(body, target_model)
-        prepared_body = _apply_extended_cache(prepared_body, headers)
+        prepared_body = _apply_extended_cache(prepared_body, headers, is_minimax=is_minimax)
         prepared_headers = self._prepare_headers(headers, api_key, extra_headers)
-        if self._is_minimax_base_url(base_url):
+        if is_minimax:
             prepared_body = self._sanitize_minimax_body(prepared_body)
             prepared_headers = self._sanitize_minimax_headers(prepared_headers)
         prepared_headers["Content-Type"] = "application/json"
-        
+
         logger.debug(
             "Anthropic Stream Request: method=%s url=%s headers=%s body=%s",
             method,

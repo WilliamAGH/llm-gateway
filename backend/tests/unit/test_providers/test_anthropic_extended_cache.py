@@ -43,11 +43,34 @@ def test_apply_extended_cache_batch_only():
     assert "ttl" not in live["system"][0]["cache_control"]  # untouched on the live tier
 
 
-def test_prepare_headers_adds_no_extended_cache_beta():
-    # The 1h TTL is GA — no extended-cache beta header is sent on any tier.
-    client = AnthropicClient()
-    batch = client._prepare_headers({"x-tier": "batch"}, "sk-test")
-    assert "extended-cache-ttl" not in batch.get("anthropic-beta", "")
+def test_apply_extended_cache_does_not_mutate_input():
+    # Root cause: the rewrite must deep-copy, so a retry/failover re-forwarding the
+    # caller's original body is never poisoned with a stale ttl="1h".
+    original = _body_with_cache_blocks()
+    result = _apply_extended_cache(original, {"x-tier": "batch"})
+    assert result is not original
+    assert result["system"][0]["cache_control"]["ttl"] == "1h"
+    assert "ttl" not in original["system"][0]["cache_control"]  # input untouched
+    assert original["tools"][0]["cache_control"]["ttl"] == "5m"  # input's explicit 5m preserved
 
-    live = client._prepare_headers({"x-tier": "production-z"}, "sk-test")
-    assert "extended-cache-ttl" not in live.get("anthropic-beta", "")
+
+def test_apply_extended_cache_skips_minimax():
+    # Framework-first: MiniMax's Anthropic-compat layer doesn't honor the extended TTL,
+    # so the batch-tier rewrite is skipped and the body passes through unchanged.
+    body = _body_with_cache_blocks()
+    result = _apply_extended_cache(body, {"x-tier": "batch"}, is_minimax=True)
+    assert result is body
+    assert "ttl" not in result["system"][0]["cache_control"]
+
+
+def test_prepare_headers_strips_internal_routing_headers():
+    # Encapsulation: x-tier (internal routing) and the x-lgw-* observability namespace
+    # must never leak to the upstream provider; the GA 1h TTL needs no beta header either.
+    client = AnthropicClient()
+    out = client._prepare_headers(
+        {"x-tier": "batch", "X-Lgw-Trace-Id": "abc123", "anthropic-version": "2023-06-01"},
+        "sk-test",
+    )
+    assert "x-tier" not in {k.lower() for k in out}
+    assert not any(k.lower().startswith("x-lgw-") for k in out)
+    assert "extended-cache-ttl" not in out.get("anthropic-beta", "")

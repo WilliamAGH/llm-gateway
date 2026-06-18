@@ -1,54 +1,53 @@
-# Follow-up: Anthropic batch-tier 1h prompt cache
+# Anthropic batch-tier 1h prompt cache — fixes + open issue
 
-Tracking doc (GitHub issues are disabled on this fork). Follow-up from `1eb8f42`
-— batch-tier 1h prompt cache via a `cache_control.ttl="1h"` rewrite, which also
-removed the now-GA `extended-cache-ttl-2025-04-11` beta-header plumbing (the 1h
-TTL no longer requires a beta header; verified against the live Anthropic
-prompt-caching docs).
+Context: `1eb8f42` shipped the batch-tier 1h prompt cache (a `cache_control.ttl="1h"`
+rewrite) and removed the now-GA `extended-cache-ttl-2025-04-11` beta header. The 1h
+TTL is GA — `ttl="1h"` on the block is all that's required (verified against the live
+Anthropic prompt-caching docs).
 
-All three items below are **pre-existing** characteristics of the
-`_apply_extended_cache` feature, **non-blocking**, in
-`backend/app/providers/anthropic_client.py`.
+## Resolved (were wrongly classified non-blocking; fixed)
 
-## 1. Shallow-copy body mutation
+All three in `backend/app/providers/anthropic_client.py`, covered by
+`backend/tests/unit/test_providers/test_anthropic_extended_cache.py`.
 
-`base.py::_prepare_body` does `body.copy()` (shallow), so `_set_cache_control_ttl`
-mutates the **original** caller's nested `cache_control` dicts in place when it
-rewrites `ttl="1h"`. Harmless for request-scoped bodies (the docstring
-acknowledges it), but a latent footgun if any retry/failover path re-forwards
-the same `body` object — the mutated `ttl` would persist into the next attempt,
-even one that routes to a non-batch tier or a different provider.
+1. **Root cause — masked error via shallow-copy mutation.** `_set_cache_control_ttl`
+   mutated nested `cache_control` dicts in place, and `_prepare_body` only shallow-copies,
+   so the caller's original body was corrupted — a retry/failover re-forwarding it (to a
+   non-batch tier or a different provider) would carry a stale `ttl="1h"`.
+   **Fix:** `_apply_extended_cache` now `copy.deepcopy`s before mutating and returns the
+   copy; the input is never touched. Test: `test_apply_extended_cache_does_not_mutate_input`.
 
-- **Fix:** deep-copy the relevant subtree before mutating (scoped to batch tier),
-  e.g. `copy.deepcopy` inside `_apply_extended_cache`.
+2. **Encapsulation — internal routing header leaked upstream.** `x-tier` (the routing
+   tier) and the gateway's `x-lgw-*` observability namespace were forwarded to Anthropic.
+   **Fix:** `_prepare_headers` now strips `TIER_HEADER` and any `x-lgw-*` header.
+   Test: `test_prepare_headers_strips_internal_routing_headers`.
 
-## 2. Internal `x-tier` routing header leaks upstream
+3. **Framework-first — unsupported vendor field on MiniMax.** `_apply_extended_cache` ran
+   before `_sanitize_minimax_body`, injecting `ttl="1h"` into MiniMax requests whose
+   Anthropic-compat layer doesn't honor it (silent cache degradation).
+   **Fix:** the rewrite is skipped for MiniMax (`is_minimax` gate at the call site;
+   `_apply_extended_cache(..., is_minimax=True)` is a no-op). Test:
+   `test_apply_extended_cache_skips_minimax`.
 
-`x-tier` is a client-supplied inbound header (`/v1/messages` forwards
-`dict(request.headers)`). `_is_batch_tier` reads it, but it is **not** in
-`_prepare_headers`'s `keys_to_remove`, so it is forwarded to Anthropic.
-Anthropic ignores unknown `x-*` headers (functionally harmless), but this leaks
-internal routing taxonomy upstream.
+## Open — the feature isn't activating in production (consistent 5m)
 
-- **Fix:** add `TIER_HEADER` (and any `x-lgw-*` internal headers) to
-  `keys_to_remove` in `_prepare_headers`.
+The 1h rewrite only fires when `_is_batch_tier(headers)` is true, i.e. the inbound header
+is literally `x-tier: batch`. Per `app/common/http_timeout.py`, **that header is set by the
+upstream queue** (`x-tier: batch | production-a | ...`) — *not* by the client and *not*
+derived by the gateway. (An earlier draft of this doc wrongly called it "client-supplied.")
 
-## 3. MiniMax + batch tier gets `ttl="1h"` injected
+Production shows consistent 5m caching, which means real Anthropic batch traffic reaching
+the gateway is **not carrying `x-tier: batch`** — it's on a different tier value, or it
+isn't transiting the lane that stamps `batch`.
 
-`_apply_extended_cache` runs **before** `_sanitize_minimax_body`, and the
-sanitizer strips `context_management` / `mcp_servers` / etc. but **not**
-`cache_control`. So a MiniMax batch request would carry `ttl="1h"`. MiniMax's
-Anthropic-compat layer may not honor the extended-TTL field.
+Note the asymmetry with the stream-deadline policy: `StreamDeadlinePolicy.for_request`
+recognizes the long class by `x-tier: batch` **OR** an `:onprem` model suffix, whereas
+`_is_batch_tier` checks only the header. (`:onprem` models are self-hosted and don't do
+Anthropic caching, so that specific signal isn't the fix — but it shows the cache gate is
+narrower than the rest of the codebase's "long class.")
 
-- **Fix:** skip `_apply_extended_cache` for MiniMax base URLs, or strip
-  `cache_control.ttl` in `_sanitize_minimax_body`.
-
-## Testing note
-
-The header / `ttl` forwarding behavior is asserted by
-`backend/tests/unit/test_providers/test_anthropic_extended_cache.py` — the
-correct layer, since these are upstream-forwarding details that are **not**
-black-box-observable from a gateway client. Live testing against
-`api.llm-gateway.iocloudhost.net` can only confirm end-to-end that batch-tier
-caching still works (`/v1/messages` with `x-tier: batch` + a `cache_control`
-block succeeds and `usage.cache_read_input_tokens > 0` on a repeat).
+**Decision needed before fixing:** is the queue supposed to stamp `x-tier: batch` on
+Anthropic batch work (fix in the `llm-inference-network` queue/edge), or should the gateway
+classify batch from a signal the harness already sends (fix `_is_batch_tier`)? Confirm what
+real traffic carries — via the gateway admin logs (`/api/admin/logs`) or the queue config —
+before changing either side.
