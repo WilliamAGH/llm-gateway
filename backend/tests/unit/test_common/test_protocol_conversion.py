@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import pytest
@@ -125,6 +126,27 @@ def test_convert_request_openai_to_openai_responses_chat():
         assert isinstance(input_val, str)
         assert input_val == "Hi"
     assert out_body["max_output_tokens"] == 12
+
+
+def test_convert_request_anthropic_to_openai_responses_hashes_long_user_id():
+    long_user = "u" * 150
+
+    path, out_body = convert_request_for_supplier(
+        request_protocol="anthropic",
+        supplier_protocol="openai_responses",
+        path="/v1/messages",
+        body={
+            "model": "any",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 16,
+            "metadata": {"user_id": long_user},
+        },
+        target_model="gpt-5.4",
+    )
+
+    assert path == "/v1/responses"
+    assert out_body["user"] == hashlib.sha256(long_user.encode("utf-8")).hexdigest()
+    assert len(out_body["user"]) == 64
 
 
 def test_convert_request_openai_to_anthropic_maps_reasoning_effort():

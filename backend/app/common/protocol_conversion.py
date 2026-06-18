@@ -16,6 +16,7 @@ Main entry points:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Any, AsyncGenerator, Optional
 
@@ -91,6 +92,7 @@ def normalize_protocol(protocol: str) -> str:
 
 _IMAGE_PATHS = {"/v1/images/generations", "/v1/images/edits", "/v1/images/variations"}
 _LEGACY_IMAGE_RESPONSE_FORMAT_MODELS = {"dall-e-2", "dall-e-3"}
+_OPENAI_USER_IDENTIFIER_MAX_LENGTH = 64
 
 
 def _apply_image_defaults(path: str, body: dict[str, Any], target_model: str) -> None:
@@ -98,6 +100,13 @@ def _apply_image_defaults(path: str, body: dict[str, Any], target_model: str) ->
     model = str(body.get("model") or target_model).strip().lower()
     if path in _IMAGE_PATHS and model in _LEGACY_IMAGE_RESPONSE_FORMAT_MODELS:
         body.setdefault("response_format", "b64_json")
+
+
+def _normalize_openai_user_identifier(body: dict[str, Any]) -> None:
+    """Keep OpenAI-bound user identifiers within the provider's 64-character limit."""
+    user = body.get("user")
+    if isinstance(user, str) and len(user) > _OPENAI_USER_IDENTIFIER_MAX_LENGTH:
+        body["user"] = hashlib.sha256(user.encode("utf-8")).hexdigest()
 
 
 def convert_request_for_supplier(
@@ -158,6 +167,9 @@ def convert_request_for_supplier(
                 converted_body,
                 source_body=body,
             )
+
+        if supplier_protocol in (OPENAI_PROTOCOL, OPENAI_RESPONSES_PROTOCOL):
+            _normalize_openai_user_identifier(converted_body)
 
         _apply_image_defaults(result.path, converted_body, target_model)
 
