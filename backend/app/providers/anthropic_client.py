@@ -14,6 +14,7 @@ import httpx
 from app.common.upstream_url import build_upstream_url
 from app.common.timer import Timer
 from app.common.http_timeout import (
+    BATCH_TIER,
     TIER_HEADER,
     StreamDeadlinePolicy,
     StreamStalled,
@@ -25,6 +26,40 @@ from app.config import get_settings
 from app.providers.base import ProviderClient, ProviderResponse
 
 logger = logging.getLogger(__name__)
+
+# Extended (1-hour) prompt-cache opt-in. Anthropic keeps an ephemeral cache_control block warm for 5m
+# by default; the 1h tier is now GA and needs only ttl="1h" on the block — the old
+# extended-cache-ttl-2025-04-11 beta header is no longer required. Applied ONLY to the batch tier
+# (long-running harness work that re-reads a stable prefix across slow iterations / resume-after-backoff),
+# never the live tier — a 1h cache WRITE costs 2x base vs 1.25x for 5m, so short one-off chats keep 5m.
+EXTENDED_CACHE_TTL = "1h"
+
+
+def _is_batch_tier(headers: dict[str, str]) -> bool:
+    """True for the batch tier (the long-running harness lane); mirrors http_timeout's tier check."""
+    return (header_value(headers, TIER_HEADER) or "").strip().lower() == BATCH_TIER
+
+
+def _set_cache_control_ttl(node: Any, ttl: str) -> None:
+    """Recursively upgrade every ephemeral cache_control block in a request body to `ttl`. Mutates in
+    place; the body is request-scoped and discarded after forwarding."""
+    if isinstance(node, dict):
+        cache_control = node.get("cache_control")
+        if isinstance(cache_control, dict) and cache_control.get("type") == "ephemeral":
+            cache_control["ttl"] = ttl
+        for value in node.values():
+            _set_cache_control_ttl(value, ttl)
+    elif isinstance(node, list):
+        for value in node:
+            _set_cache_control_ttl(value, ttl)
+
+
+def _apply_extended_cache(body: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    """Batch tier only: upgrade ephemeral cache_control blocks to the 1h TTL so a stable prefix stays
+    cache-readable across slow iterations / resume-after-backoff. No-op for other tiers."""
+    if _is_batch_tier(headers):
+        _set_cache_control_ttl(body, EXTENDED_CACHE_TTL)
+    return body
 
 
 class AnthropicClient(ProviderClient):
@@ -141,7 +176,7 @@ class AnthropicClient(ProviderClient):
         for key in list(new_headers.keys()):
             if key.lower() == "x-user-id":
                 del new_headers[key]
-        
+
         return new_headers
     
     async def forward(
@@ -176,6 +211,7 @@ class AnthropicClient(ProviderClient):
         """
         url = build_upstream_url(base_url, path)
         prepared_body = self._prepare_body(body, target_model)
+        prepared_body = _apply_extended_cache(prepared_body, headers)
         prepared_headers = self._prepare_headers(headers, api_key, extra_headers)
         if self._is_minimax_base_url(base_url):
             prepared_body = self._sanitize_minimax_body(prepared_body)
@@ -356,6 +392,7 @@ class AnthropicClient(ProviderClient):
         """
         url = build_upstream_url(base_url, path)
         prepared_body = self._prepare_body(body, target_model)
+        prepared_body = _apply_extended_cache(prepared_body, headers)
         prepared_headers = self._prepare_headers(headers, api_key, extra_headers)
         if self._is_minimax_base_url(base_url):
             prepared_body = self._sanitize_minimax_body(prepared_body)
