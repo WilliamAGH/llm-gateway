@@ -56,20 +56,63 @@ def _set_cache_control_ttl(node: Any, ttl: str) -> None:
             _set_cache_control_ttl(value, ttl)
 
 
+def _has_cache_control(node: Any) -> bool:
+    """True if any ephemeral cache_control breakpoint already exists anywhere in the request
+    (system, tools, or messages). Short-circuits on the first match."""
+    if isinstance(node, dict):
+        if isinstance(node.get("cache_control"), dict):
+            return True
+        return any(_has_cache_control(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_has_cache_control(value) for value in node)
+    return False
+
+
+def _ensure_cache_breakpoints(body: dict[str, Any]) -> None:
+    """Tag the stable prefix (tools + system) with an ephemeral cache_control breakpoint when the
+    client set NONE, so Anthropic actually caches it. Mutates in place; the caller owns the copy.
+
+    The main Claude Code session gets breakpoints from the CLI, but sub-agent turns (custom
+    AgentDefinition prompts) ship none, and Anthropic only caches explicitly-tagged blocks — so without
+    this they never cache. We tag only the always-stable prefix (last tool + last system block), never
+    the volatile trailing message, and only when no breakpoint exists at all (Anthropic allows max 4 and
+    the client's own placement wins). A breakpoint on a sub-floor (<1024-token) prefix is ignored by
+    Anthropic, so this is a no-op — never a cache-write charge — when there is nothing substantial to
+    cache. Anthropic special-cases its own `x-anthropic-billing-header` system block, so a stable prefix
+    that includes it still caches (verified live), which is why that marker is kept on the Anthropic path.
+    """
+    if _has_cache_control(body):
+        return
+    tools = body.get("tools")
+    if isinstance(tools, list) and tools and isinstance(tools[-1], dict):
+        tools[-1]["cache_control"] = {"type": "ephemeral"}
+    system = body.get("system")
+    if isinstance(system, list):
+        for block in reversed(system):
+            if isinstance(block, dict):
+                block["cache_control"] = {"type": "ephemeral"}
+                break
+    elif isinstance(system, str) and system.strip():
+        body["system"] = [
+            {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+        ]
+
+
 def _apply_extended_cache(
     body: dict[str, Any],
     headers: dict[str, str],
     *,
     is_minimax: bool = False,
 ) -> dict[str, Any]:
-    """Batch tier, real-Anthropic only: return a DEEP COPY of `body` with ephemeral cache_control
-    blocks upgraded to the 1h TTL so a stable prefix stays cache-readable across slow iterations /
-    resume-after-backoff. Returns `body` unchanged (no copy) when:
-      - not the batch tier (live traffic keeps the cheaper 5m default), or
+    """Batch tier, real-Anthropic only: return a DEEP COPY of `body` set up for the 1h prompt cache —
+    first ensure the stable prefix carries a breakpoint (`_ensure_cache_breakpoints`, for sub-agent
+    turns that ship none), then upgrade every ephemeral block to the 1h TTL so that prefix stays
+    cache-readable across slow iterations / resume-after-backoff. Returns `body` unchanged (no copy):
+      - not the batch tier (live traffic keeps the cheaper 5m default and the client owns breakpoints), or
       - the upstream is MiniMax, whose Anthropic-compat layer does not honor the extended TTL
         (sending it would silently degrade caching with no error).
     Deep-copies before mutating so a retry/failover that re-forwards the caller's original body is
-    never poisoned with a stale ttl="1h"."""
+    never poisoned with a stale ttl="1h" or an injected breakpoint."""
     tier_value = header_value(headers, TIER_HEADER)
     if is_minimax or not _is_batch_tier(headers):
         logger.info(
@@ -81,6 +124,7 @@ def _apply_extended_cache(
         return body
     logger.info("ext-cache apply 1h ttl: x-tier=%r", tier_value)
     body = copy.deepcopy(body)
+    _ensure_cache_breakpoints(body)
     _set_cache_control_ttl(body, EXTENDED_CACHE_TTL)
     return body
 
@@ -88,14 +132,14 @@ def _apply_extended_cache(
 class AnthropicClient(ProviderClient):
     """
     Anthropic Protocol Client
-    
+
     Supports Anthropic-style API request forwarding, including:
     - /v1/messages
     """
-    
+
     # Anthropic API Version
     ANTHROPIC_VERSION = "2023-06-01"
-    
+
     def __init__(self):
         """Initialize client"""
         settings = get_settings()
@@ -147,7 +191,7 @@ class AnthropicClient(ProviderClient):
         ):
             sanitized.pop(key, None)
         return sanitized
-    
+
     def _prepare_headers(
         self,
         headers: dict[str, str],
@@ -156,19 +200,19 @@ class AnthropicClient(ProviderClient):
     ) -> dict[str, str]:
         """
         Prepare Anthropic request headers
-        
+
         Anthropic uses x-api-key header for authentication.
-        
+
         Args:
             headers: Original request headers
             api_key: Provider API Key
             extra_headers: Extra headers
-        
+
         Returns:
             dict: Processed request headers
         """
         new_headers = dict(headers)
-        
+
         # Remove original authentication headers and auto-generated headers
         keys_to_remove = [
             "authorization",
@@ -187,15 +231,15 @@ class AnthropicClient(ProviderClient):
             lowered = key.lower()
             if lowered in keys_to_remove or lowered.startswith("x-lgw-"):
                 del new_headers[key]
-        
+
         # Add Anthropic specific header
         if api_key:
             new_headers["x-api-key"] = api_key
-        
+
         # Ensure Anthropic version is set
         if "anthropic-version" not in [k.lower() for k in new_headers.keys()]:
             new_headers["anthropic-version"] = self.ANTHROPIC_VERSION
-            
+
         # Merge extra headers (overwrite existing)
         if extra_headers:
             new_headers.update(extra_headers)
@@ -205,7 +249,7 @@ class AnthropicClient(ProviderClient):
                 del new_headers[key]
 
         return new_headers
-    
+
     async def forward(
         self,
         base_url: str,
@@ -221,7 +265,7 @@ class AnthropicClient(ProviderClient):
     ) -> ProviderResponse:
         """
         Forward request to Anthropic-compatible provider
-        
+
         Args:
             base_url: Provider base URL
             api_key: Provider API Key
@@ -232,14 +276,16 @@ class AnthropicClient(ProviderClient):
             target_model: Target model name
             response_mode: Response mode, "parsed" (parse JSON) or "raw" (return raw bytes)
             extra_headers: Extra headers
-        
+
         Returns:
             ProviderResponse: Provider response
         """
         url = build_upstream_url(base_url, path)
         is_minimax = self._is_minimax_base_url(base_url)
         prepared_body = self._prepare_body(body, target_model)
-        prepared_body = _apply_extended_cache(prepared_body, headers, is_minimax=is_minimax)
+        prepared_body = _apply_extended_cache(
+            prepared_body, headers, is_minimax=is_minimax
+        )
         prepared_headers = self._prepare_headers(headers, api_key, extra_headers)
         if is_minimax:
             prepared_body = self._sanitize_minimax_body(prepared_body)
@@ -253,21 +299,23 @@ class AnthropicClient(ProviderClient):
             prepared_headers,
             json.dumps(prepared_body, ensure_ascii=False),
         )
-        
+
         timer = Timer().start()
-        
+
         try:
             proxy_url = proxy_config.get("all://") if proxy_config else None
-            async with httpx.AsyncClient(timeout=self.timeout, proxy=proxy_url) as client:
+            async with httpx.AsyncClient(
+                timeout=self.timeout, proxy=proxy_url
+            ) as client:
                 response = await client.request(
                     method=method,
                     url=url,
                     headers=prepared_headers,
                     json=prepared_body,
                 )
-                
+
                 timer.mark_first_byte()
-                
+
                 if response_mode == "raw":
                     response_body: Any = response.content
                 else:
@@ -276,9 +324,9 @@ class AnthropicClient(ProviderClient):
                         response_body = response.json()
                     except json.JSONDecodeError:
                         pass
-                
+
                 timer.stop()
-                
+
                 return ProviderResponse(
                     status_code=response.status_code,
                     headers=dict(response.headers),
@@ -286,7 +334,7 @@ class AnthropicClient(ProviderClient):
                     first_byte_delay_ms=timer.first_byte_delay_ms,
                     total_time_ms=timer.total_time_ms,
                 )
-        
+
         except httpx.TimeoutException as e:
             timer.stop()
             return ProviderResponse(
@@ -295,7 +343,7 @@ class AnthropicClient(ProviderClient):
                 first_byte_delay_ms=timer.first_byte_delay_ms,
                 total_time_ms=timer.total_time_ms,
             )
-        
+
         except httpx.RequestError as e:
             timer.stop()
             return ProviderResponse(
@@ -304,7 +352,7 @@ class AnthropicClient(ProviderClient):
                 first_byte_delay_ms=timer.first_byte_delay_ms,
                 total_time_ms=timer.total_time_ms,
             )
-        
+
         except Exception as e:
             timer.stop()
             return ProviderResponse(
@@ -313,7 +361,7 @@ class AnthropicClient(ProviderClient):
                 first_byte_delay_ms=timer.first_byte_delay_ms,
                 total_time_ms=timer.total_time_ms,
             )
-    
+
     async def list_models(
         self,
         base_url: str,
@@ -337,7 +385,9 @@ class AnthropicClient(ProviderClient):
 
         try:
             proxy_url = proxy_config.get("all://") if proxy_config else None
-            async with httpx.AsyncClient(timeout=self.timeout, proxy=proxy_url) as client:
+            async with httpx.AsyncClient(
+                timeout=self.timeout, proxy=proxy_url
+            ) as client:
                 response = await client.request(
                     method="GET",
                     url=url,
@@ -404,7 +454,7 @@ class AnthropicClient(ProviderClient):
     ) -> AsyncGenerator[tuple[bytes, ProviderResponse], None]:
         """
         Forward streaming request to Anthropic-compatible provider
-        
+
         Args:
             base_url: Provider base URL
             api_key: Provider API Key
@@ -414,14 +464,16 @@ class AnthropicClient(ProviderClient):
             body: Request body
             target_model: Target model name
             extra_headers: Extra headers
-        
+
         Yields:
             tuple[bytes, ProviderResponse]: (Data chunk, Response info)
         """
         url = build_upstream_url(base_url, path)
         is_minimax = self._is_minimax_base_url(base_url)
         prepared_body = self._prepare_body(body, target_model)
-        prepared_body = _apply_extended_cache(prepared_body, headers, is_minimax=is_minimax)
+        prepared_body = _apply_extended_cache(
+            prepared_body, headers, is_minimax=is_minimax
+        )
         prepared_headers = self._prepare_headers(headers, api_key, extra_headers)
         if is_minimax:
             prepared_body = self._sanitize_minimax_body(prepared_body)
@@ -435,13 +487,15 @@ class AnthropicClient(ProviderClient):
             prepared_headers,
             json.dumps(prepared_body, ensure_ascii=False),
         )
-        
+
         timer = Timer().start()
         first_chunk = True
-        
+
         try:
             proxy_url = proxy_config.get("all://") if proxy_config else None
-            async with httpx.AsyncClient(timeout=self.timeout, proxy=proxy_url) as client:
+            async with httpx.AsyncClient(
+                timeout=self.timeout, proxy=proxy_url
+            ) as client:
                 async with client.stream(
                     method=method,
                     url=url,
@@ -457,14 +511,16 @@ class AnthropicClient(ProviderClient):
                         body_bytes = await response.aread()
                         timer.mark_first_byte()
                         timer.stop()
-                        provider_response.first_byte_delay_ms = timer.first_byte_delay_ms
+                        provider_response.first_byte_delay_ms = (
+                            timer.first_byte_delay_ms
+                        )
                         provider_response.total_time_ms = timer.total_time_ms
                         provider_response.body = body_bytes
                         reason = response.reason_phrase or "Upstream error"
                         provider_response.error = f"{response.status_code} {reason}"
                         yield body_bytes or b"", provider_response
                         return
-                    
+
                     first_byte_timeout, idle_timeout = self.stream_policy.for_request(
                         tier=header_value(headers, TIER_HEADER),
                         requested_model=requested_model,
@@ -489,29 +545,38 @@ class AnthropicClient(ProviderClient):
 
         except StreamStalled as e:
             timer.stop()
-            yield b"", ProviderResponse(
-                status_code=504,
-                error=f"Request timeout: {str(e)}",
-                first_byte_delay_ms=timer.first_byte_delay_ms,
-                total_time_ms=timer.total_time_ms,
+            yield (
+                b"",
+                ProviderResponse(
+                    status_code=504,
+                    error=f"Request timeout: {str(e)}",
+                    first_byte_delay_ms=timer.first_byte_delay_ms,
+                    total_time_ms=timer.total_time_ms,
+                ),
             )
 
         except httpx.TimeoutException as e:
             timer.stop()
-            yield b"", ProviderResponse(
-                status_code=504,
-                error=f"Request timeout: {str(e)}",
-                first_byte_delay_ms=timer.first_byte_delay_ms,
-                total_time_ms=timer.total_time_ms,
+            yield (
+                b"",
+                ProviderResponse(
+                    status_code=504,
+                    error=f"Request timeout: {str(e)}",
+                    first_byte_delay_ms=timer.first_byte_delay_ms,
+                    total_time_ms=timer.total_time_ms,
+                ),
             )
 
         except httpx.RequestError as e:
             timer.stop()
-            yield b"", ProviderResponse(
-                status_code=502,
-                error=f"Request error: {str(e)}",
-                first_byte_delay_ms=timer.first_byte_delay_ms,
-                total_time_ms=timer.total_time_ms,
+            yield (
+                b"",
+                ProviderResponse(
+                    status_code=502,
+                    error=f"Request error: {str(e)}",
+                    first_byte_delay_ms=timer.first_byte_delay_ms,
+                    total_time_ms=timer.total_time_ms,
+                ),
             )
 
         except Exception as e:
@@ -519,9 +584,12 @@ class AnthropicClient(ProviderClient):
             # mid-stream. CancelledError is a BaseException and is intentionally
             # NOT caught (client disconnect).
             timer.stop()
-            yield b"", ProviderResponse(
-                status_code=500,
-                error=f"Unexpected stream error: {str(e)}",
-                first_byte_delay_ms=timer.first_byte_delay_ms,
-                total_time_ms=timer.total_time_ms,
+            yield (
+                b"",
+                ProviderResponse(
+                    status_code=500,
+                    error=f"Unexpected stream error: {str(e)}",
+                    first_byte_delay_ms=timer.first_byte_delay_ms,
+                    total_time_ms=timer.total_time_ms,
+                ),
             )
