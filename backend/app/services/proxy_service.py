@@ -3,6 +3,7 @@
 Implements core business logic for request proxying."""
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -58,7 +59,83 @@ CandidateKey = tuple[str, int] | tuple[str, int, str]
 # WARN fires on a genuine repeat-miss (the signature of a broken/invalidated prefix), not on cold
 # starts. Process-local and best-effort; the authoritative signal is the per-request structured log.
 _CACHE_KEY_TTL_SECONDS = 600.0
+_PROMPT_CACHE_PREFIX_CHARS = 8192
 _recent_prompt_cache_keys: dict[str, float] = {}
+
+
+def _non_empty_prompt_cache_key(body: Any) -> Optional[str]:
+    if not isinstance(body, dict):
+        return None
+    key = body.get("prompt_cache_key")
+    return key if isinstance(key, str) and key.strip() else None
+
+
+def _is_kimi_prompt_cache_target(*values: Any) -> bool:
+    markers = ("kimi", "moonshot", "api.kimi.com", "api.moonshot.ai")
+    return any(
+        any(marker in value.lower() for marker in markers)
+        for value in (str(v) for v in values if v is not None)
+    )
+
+
+def _prompt_cache_prefix(body: dict[str, Any]) -> str:
+    prefix_owner = {
+        key: body[key]
+        for key in ("messages", "system", "instructions", "input", "tools", "response_format")
+        if key in body
+    }
+    return json.dumps(
+        prefix_owner or body,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )[:_PROMPT_CACHE_PREFIX_CHARS]
+
+
+def _prompt_cache_key_for_request(
+    body: Any, requested_model: str, target_model: list[str] | None = None
+) -> Optional[str]:
+    existing = _non_empty_prompt_cache_key(body)
+    if existing:
+        return existing
+    if not isinstance(body, dict):
+        return None
+    targets = [requested_model, *(target_model or [])]
+    if not _is_kimi_prompt_cache_target(*targets):
+        return None
+    seed = json.dumps(
+        {"model": requested_model, "prefix": _prompt_cache_prefix(body)},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"llmgw:kimi:{hashlib.sha256(seed.encode('utf-8')).hexdigest()[:24]}"
+
+
+def _body_with_prompt_cache_key(body: Any, prompt_cache_key: Optional[str]) -> Any:
+    if not prompt_cache_key or not isinstance(body, dict) or _non_empty_prompt_cache_key(body):
+        return body
+    return {**body, "prompt_cache_key": prompt_cache_key}
+
+
+def _supplier_body_with_prompt_cache_key(
+    body: dict[str, Any],
+    prompt_cache_key: Optional[str],
+    *,
+    requested_model: str,
+    target_model: str,
+    base_url: str,
+    supplier_protocol: Optional[str],
+) -> dict[str, Any]:
+    if (
+        not prompt_cache_key
+        or _non_empty_prompt_cache_key(body)
+        or supplier_protocol != "openai"
+        or not _is_kimi_prompt_cache_target(requested_model, target_model, base_url)
+    ):
+        return body
+    return {**body, "prompt_cache_key": prompt_cache_key}
 
 
 def _request_has_cache_signal(body: Any) -> bool:
